@@ -15,6 +15,11 @@ const exchangeKey = defineSecret('EXCHANGE_RATE_API_KEY');
 const geminiApiKey = defineSecret('GEMINI_API_KEY');
 
 const region = 'asia-northeast3';
+const databaseId = 'aiassistant';
+
+function db() {
+  return getFirestore(databaseId);
+}
 const ttlMs = 120 * 60 * 60 * 1000;
 
 function readSecret(param) {
@@ -37,11 +42,11 @@ function requireUid(request) {
 }
 
 function userCol(uid, name) {
-  return getFirestore().collection('users').doc(uid).collection(name);
+  return db().collection('users').doc(uid).collection(name);
 }
 
 async function audit(uid, action, targetId, fields) {
-  await getFirestore().collection('audit').add({
+  await db().collection('audit').add({
     action,
     actorUid: uid,
     targetId,
@@ -100,7 +105,7 @@ async function saveSchedule(uid, draft) {
 async function recalculateBalances(uid) {
   const snap = await userCol(uid, 'balance_entries').orderBy('occurredAt').orderBy('__name__').get();
   let running = 0;
-  let batch = getFirestore().batch();
+  let batch = db().batch();
   let count = 0;
   for (const doc of snap.docs) {
     const data = doc.data();
@@ -109,7 +114,7 @@ async function recalculateBalances(uid) {
     count += 1;
     if (count === 400) {
       await batch.commit();
-      batch = getFirestore().batch();
+      batch = db().batch();
       count = 0;
     }
   }
@@ -145,7 +150,7 @@ async function purgeExpired(uid, name) {
   if (snap.empty) {
     return;
   }
-  const batch = getFirestore().batch();
+  const batch = db().batch();
   snap.docs.forEach((doc) => batch.delete(doc.ref));
   await batch.commit();
 }
@@ -320,14 +325,14 @@ function geminiModel() {
 }
 
 async function commitDeletes(refs) {
-  let batch = getFirestore().batch();
+  let batch = db().batch();
   let count = 0;
   for (const ref of refs) {
     batch.delete(ref);
     count += 1;
     if (count === 400) {
       await batch.commit();
-      batch = getFirestore().batch();
+      batch = db().batch();
       count = 0;
     }
   }
@@ -703,14 +708,14 @@ exports.deleteByIds = onCall({ region }, async (request) => {
   if (ids.length === 0) {
     throw new HttpsError('invalid-argument', 'bad-ids');
   }
-  let batch = getFirestore().batch();
+  let batch = db().batch();
   let count = 0;
   for (const id of ids) {
     batch.delete(userCol(uid, collection).doc(id));
     count += 1;
     if (count === 400) {
       await batch.commit();
-      batch = getFirestore().batch();
+      batch = db().batch();
       count = 0;
     }
   }
@@ -842,11 +847,11 @@ exports.withdraw = onCall({ region, timeoutSeconds: 120 }, async (request) => {
     const snap = await userCol(uid, name).get();
     await commitDeletes(snap.docs.map((doc) => doc.ref));
   }
-  const audits = await getFirestore().collection('audit').where('actorUid', '==', uid).get();
+  const audits = await db().collection('audit').where('actorUid', '==', uid).get();
   await commitDeletes(audits.docs.map((doc) => doc.ref));
   const [files] = await getStorage().bucket().getFiles({ prefix: `uploads/${uid}/` });
   await Promise.all(files.map((file) => file.delete({ ignoreNotFound: true })));
-  await getFirestore().collection('users').doc(uid).delete().catch(() => undefined);
+  await db().collection('users').doc(uid).delete().catch(() => undefined);
   await getAuth().deleteUser(uid);
   return { ok: true };
 });

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
 import '../logic/domain.dart';
@@ -14,7 +15,8 @@ class AssistantApi {
     FirebaseStorage? storage,
     FirebaseAuth? auth,
   })  : _functions = functions ?? FirebaseFunctions.instanceFor(region: 'asia-northeast3'),
-        _firestore = firestore ?? FirebaseFirestore.instance,
+        _firestore = firestore ??
+            FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'aiassistant'),
         _storage = storage ?? FirebaseStorage.instance,
         _auth = auth ?? FirebaseAuth.instance;
 

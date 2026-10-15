@@ -15,12 +15,12 @@ flutter run -d chrome
 
 ## Firebase
 
-프로젝트 ID는 `aiassistant-49b02`, 리전은 `asia-northeast3` 입니다. 앱과 Cloud Functions는 Firestore 데이터베이스 `(default)` 를 사용합니다. 같은 프로젝트의 이름 있는 데이터베이스 `aiassistant` 는 앱이 읽거나 쓰지 않습니다.
+프로젝트 ID는 `aiassistant-49b02`, 리전은 `asia-northeast3` 입니다. 앱과 Cloud Functions는 이름 있는 Firestore 데이터베이스 `aiassistant` 를 사용합니다.
 
 콘솔에서 켤 항목:
 
 - Authentication: 익명, Google. Google 웹 클라이언트는 이 프로젝트(번호 `148982182247`)에서 만든 클라이언트여야 합니다.
-- Firestore `(default)`
+- Firestore 데이터베이스 `aiassistant`
 - Storage 버킷 `aiassistant-49b02.firebasestorage.app`
 - Functions
 
