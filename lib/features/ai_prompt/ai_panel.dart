@@ -9,6 +9,8 @@ import '../../shared/app_text.dart';
 import '../../shared/errors.dart';
 import '../../shared/logic/domain.dart';
 import '../../shared/state/providers.dart';
+import '../../shared/theme/ink_icons.dart';
+import '../../shared/theme/ink_theme.dart';
 import '../../shared/widgets/chart_block.dart';
 
 class AiPanel extends ConsumerStatefulWidget {
@@ -65,12 +67,12 @@ class _AiPanelState extends ConsumerState<AiPanel> {
     final turns = [...remote, ...local.where((turn) => remote.every((item) => item.id != turn.id))];
 
     return ColoredBox(
-      color: const Color(0xFFE4ECE6),
+      color: InkPalette.panel,
       child: Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-            child: Text(text.welcome, style: const TextStyle(fontSize: 13)),
+            child: Text(text.welcome, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
           ),
           Expanded(
             child: ListView.builder(
@@ -98,11 +100,11 @@ class _AiPanelState extends ConsumerState<AiPanel> {
                 IconButton(
                   tooltip: text.voiceBadge,
                   onPressed: () => _toggleVoice(locale),
-                  icon: Icon(_listening ? Icons.mic : Icons.mic_none),
+                  icon: InkIcon(InkGlyph.mic, color: _listening ? InkPalette.coral : InkPalette.ink),
                 ),
                 IconButton(
                   onPressed: _pickFile,
-                  icon: const Icon(Icons.attach_file),
+                  icon: const InkIcon(InkGlyph.clip),
                 ),
                 Expanded(
                   child: Focus(
@@ -119,17 +121,12 @@ class _AiPanelState extends ConsumerState<AiPanel> {
                       controller: _input,
                       minLines: 1,
                       maxLines: 4,
-                      decoration: InputDecoration(
-                        filled: true,
-                        fillColor: Colors.white,
-                        hintText: _file?.name,
-                        border: const OutlineInputBorder(),
-                      ),
+                      decoration: InputDecoration(hintText: _file?.name),
                     ),
                   ),
                 ),
                 const SizedBox(width: 6),
-                FilledButton(onPressed: () => _send(text, locale), child: const Icon(Icons.send)),
+                FilledButton(onPressed: () => _send(text, locale), child: const InkIcon(InkGlyph.send, color: InkPalette.mustard)),
               ],
             ),
           ),
@@ -145,8 +142,9 @@ class _AiPanelState extends ConsumerState<AiPanel> {
         children: [
           Align(
             alignment: Alignment.centerLeft,
-            child: _bubble(
-              color: Colors.white,
+            child: SpeechCard(
+              color: InkPalette.cream,
+              alignLeft: true,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -160,8 +158,9 @@ class _AiPanelState extends ConsumerState<AiPanel> {
           const SizedBox(height: 6),
           Align(
             alignment: Alignment.centerRight,
-            child: _bubble(
-              color: const Color(0xFFEFFDDE),
+            child: SpeechCard(
+              color: InkPalette.mint,
+              alignLeft: false,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -192,16 +191,6 @@ class _AiPanelState extends ConsumerState<AiPanel> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _bubble({required Color color, required Widget child}) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 520),
-      child: DecoratedBox(
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(16)),
-        child: Padding(padding: const EdgeInsets.all(10), child: child),
       ),
     );
   }

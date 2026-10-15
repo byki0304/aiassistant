@@ -10,6 +10,8 @@ import 'firebase_options.dart';
 import 'pages/responsive_shell.dart';
 import 'shared/app_text.dart';
 import 'shared/state/providers.dart';
+import 'shared/theme/ink_icons.dart';
+import 'shared/theme/ink_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,15 +26,11 @@ class AiAssistantApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final locale = ref.watch(localeProvider);
-    final base = ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0F4C5C)),
-      useMaterial3: true,
-      scaffoldBackgroundColor: const Color(0xFFF4F7F8),
-    );
+    final seed = ThemeData(useMaterial3: true, scaffoldBackgroundColor: InkPalette.paper);
     final textTheme = switch (locale.languageCode) {
-      'ja' => GoogleFonts.notoSansJpTextTheme(base.textTheme),
-      'en' => GoogleFonts.notoSansTextTheme(base.textTheme),
-      _ => GoogleFonts.notoSansKrTextTheme(base.textTheme),
+      'ja' => GoogleFonts.notoSansJpTextTheme(seed.textTheme),
+      'en' => GoogleFonts.notoSansTextTheme(seed.textTheme),
+      _ => GoogleFonts.notoSansKrTextTheme(seed.textTheme),
     };
     return MaterialApp(
       title: 'aiAssistant',
@@ -44,7 +42,7 @@ class AiAssistantApp extends ConsumerWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      theme: base.copyWith(textTheme: textTheme),
+      theme: inkTheme(textTheme),
       home: const AuthGate(),
     );
   }

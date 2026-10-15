@@ -2,6 +2,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
 import '../logic/domain.dart';
+import '../theme/ink_icons.dart';
 
 class ChartBlock extends StatelessWidget {
   const ChartBlock({super.key, required this.chart});
@@ -39,7 +40,7 @@ class ChartBlock extends StatelessWidget {
                 BarChartRodData(
                   toY: chart.values[i],
                   width: 14,
-                  color: const Color(0xFF0F4C5C),
+                  color: InkPalette.coral,
                   borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
                 ),
               ],
@@ -60,7 +61,7 @@ class ChartBlock extends StatelessWidget {
             spots: [
               for (var i = 0; i < chart.values.length; i++) FlSpot(i.toDouble(), chart.values[i]),
             ],
-            color: const Color(0xFF0F4C5C),
+            color: InkPalette.teal,
             barWidth: 3,
             dotData: const FlDotData(show: true),
           ),
@@ -71,7 +72,7 @@ class ChartBlock extends StatelessWidget {
   }
 
   Widget _pie() {
-    const colors = [Color(0xFF0F4C5C), Color(0xFF1D7A72), Color(0xFFC2410C), Color(0xFFCA8A04)];
+    const colors = [InkPalette.coral, InkPalette.teal, InkPalette.mustard, InkPalette.ink];
     return PieChart(
       PieChartData(
         sections: [
@@ -81,7 +82,7 @@ class ChartBlock extends StatelessWidget {
               title: chart.labels[i],
               radius: 58,
               color: colors[i % colors.length],
-              titleStyle: const TextStyle(fontSize: 10, color: Colors.white),
+              titleStyle: const TextStyle(fontSize: 10, color: InkPalette.cream, fontWeight: FontWeight.w800),
             ),
         ],
       ),

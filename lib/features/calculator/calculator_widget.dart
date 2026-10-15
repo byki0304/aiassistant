@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../shared/app_text.dart';
 import '../../shared/api/assistant_api.dart';
 import '../../shared/state/providers.dart';
+import '../../shared/theme/ink_icons.dart';
 import 'calc_engine.dart';
 
 class CalculatorWidget extends ConsumerWidget {
@@ -20,10 +21,9 @@ class CalculatorWidget extends ConsumerWidget {
     final calc = ref.read(calcProvider.notifier);
     final rates = ref.watch(exchangeProvider).asData?.value ?? const <ExchangeItem>[];
 
-    return Material(
-      elevation: popupMode ? 8 : 0,
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(12),
+    final panel = Material(
+      elevation: 0,
+      color: InkPalette.cream,
       child: Column(
         children: [
           GestureDetector(
@@ -31,23 +31,23 @@ class CalculatorWidget extends ConsumerWidget {
             child: Container(
               height: 36,
               padding: const EdgeInsets.symmetric(horizontal: 8),
-              decoration: const BoxDecoration(
-                color: Color(0xFF0F4C5C),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+              decoration: BoxDecoration(
+                color: InkPalette.mustard,
+                border: popupMode ? Border.all(color: InkPalette.ink, width: 2) : const Border(bottom: BorderSide(color: InkPalette.ink, width: 2)),
               ),
               child: Row(
                 children: [
                   if (!popupMode)
                     TextButton(
                       onPressed: () => ref.read(floatProvider.notifier).open(),
-                      child: Text(text.popup, style: const TextStyle(color: Colors.white)),
+                      child: Text(text.popup, style: const TextStyle(color: InkPalette.ink, fontWeight: FontWeight.w800)),
                     ),
                   const Spacer(),
                   if (popupMode)
                     IconButton(
                       tooltip: text.delete,
                       onPressed: () => ref.read(floatProvider.notifier).close(),
-                      icon: const Icon(Icons.close, color: Colors.white, size: 18),
+                      icon: const Icon(Icons.close, color: InkPalette.ink, size: 18),
                     ),
                 ],
               ),
@@ -100,8 +100,10 @@ class CalculatorWidget extends ConsumerWidget {
                 for (final label in ['C', '⌫', '±', '÷', '7', '8', '9', '×', '4', '5', '6', '-', '1', '2', '3', '+', '0', '.', '='])
                   FilledButton(
                     style: FilledButton.styleFrom(
-                      backgroundColor: _op(label) ? const Color(0xFF1D7A72) : const Color(0xFF14363F),
+                      backgroundColor: _op(label) ? InkPalette.coral : InkPalette.ink,
+                      foregroundColor: _op(label) ? InkPalette.cream : InkPalette.mustard,
                       padding: EdgeInsets.zero,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: const BorderSide(color: InkPalette.ink, width: 1.6)),
                     ),
                     onPressed: () => _press(calc, label),
                     child: Text(label),
@@ -111,6 +113,18 @@ class CalculatorWidget extends ConsumerWidget {
           ),
         ],
       ),
+    );
+    if (!popupMode) {
+      return panel;
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: InkPalette.cream,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: InkPalette.ink, width: 2.5),
+        boxShadow: const [BoxShadow(color: InkPalette.ink, offset: Offset(5, 5))],
+      ),
+      child: ClipRRect(borderRadius: BorderRadius.circular(13), child: panel),
     );
   }
 

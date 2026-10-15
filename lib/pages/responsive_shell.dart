@@ -12,6 +12,8 @@ import '../features/schedules/schedules_screen.dart';
 import '../features/weather/weather_screen.dart';
 import '../shared/app_text.dart';
 import '../shared/state/providers.dart';
+import '../shared/theme/ink_icons.dart';
+import '../shared/theme/ink_theme.dart';
 
 class ResponsiveShell extends ConsumerWidget {
   const ResponsiveShell({super.key});
@@ -24,88 +26,104 @@ class ResponsiveShell extends ConsumerWidget {
     final width = MediaQuery.sizeOf(context).width;
     final landscape = MediaQuery.orientationOf(context) == Orientation.landscape;
     final body = account ? const AccountPage() : _menuBody(menu);
+    final labels = {for (final item in AppMenu.values) item: text.menuName(item.name)};
 
-    Widget shell;
+    void select(AppMenu item) {
+      ref.read(accountOpenProvider.notifier).close();
+      ref.read(menuProvider.notifier).select(item);
+    }
+
+    void selectIndex(int index) => select(AppMenu.values[index]);
+
+    final chat = ComicFrame(
+      caption: text.appTitle,
+      accent: InkPalette.sky,
+      glyph: InkGlyph.send,
+      child: const AiPanel(),
+    );
+    final menuPane = ComicFrame(
+      caption: account ? text.myPage : text.menuName(menu.name),
+      accent: account ? InkPalette.blush : InkPalette.mustard,
+      glyph: account ? InkGlyph.badge : inkGlyphFor(menu),
+      child: body,
+    );
+
+    final Widget shell;
     if (width >= 1024) {
-      shell = Row(
-        children: [
-          NavigationRail(
-            selectedIndex: menu.index,
-            onDestinationSelected: (index) {
-              ref.read(accountOpenProvider.notifier).close();
-              ref.read(menuProvider.notifier).select(AppMenu.values[index]);
-            },
-            labelType: NavigationRailLabelType.all,
-            destinations: _destinations(text),
-          ),
-          const VerticalDivider(width: 1),
-          Expanded(
-            child: Column(
-              children: [
-                _desktopBar(context, ref, text, menu),
-                Expanded(
-                  child: Row(
-                    children: [
-                      const Expanded(flex: 42, child: AiPanel()),
-                      const VerticalDivider(width: 1),
-                      Expanded(flex: 58, child: body),
-                    ],
-                  ),
-                ),
-              ],
+      shell = Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 108,
+              child: ComicNav(
+                selected: menu,
+                labels: labels,
+                showLabels: true,
+                onSelect: select,
+                onAccount: () => ref.read(accountOpenProvider.notifier).open(),
+                onLogout: () => FirebaseAuth.instance.signOut(),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 14),
+            Expanded(flex: 42, child: chat),
+            const SizedBox(width: 14),
+            Expanded(flex: 58, child: menuPane),
+          ],
+        ),
       );
     } else if (landscape) {
-      shell = Row(
-        children: [
-          NavigationRail(
-            selectedIndex: menu.index,
-            minWidth: 72,
-            trailing: IconButton(
-              tooltip: text.myPage,
-              onPressed: () => ref.read(accountOpenProvider.notifier).open(),
-              icon: const Icon(Icons.person),
+      shell = Padding(
+        padding: const EdgeInsets.all(8),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 64,
+              child: ComicNav(
+                selected: menu,
+                labels: labels,
+                showLabels: false,
+                onSelect: select,
+                onAccount: () => ref.read(accountOpenProvider.notifier).open(),
+              ),
             ),
-            onDestinationSelected: (index) {
-              ref.read(accountOpenProvider.notifier).close();
-              ref.read(menuProvider.notifier).select(AppMenu.values[index]);
-            },
-            destinations: _destinations(text),
-          ),
-          const Expanded(flex: 45, child: AiPanel()),
-          const VerticalDivider(width: 1),
-          Expanded(flex: 55, child: body),
-        ],
+            const SizedBox(width: 8),
+            Expanded(flex: 45, child: chat),
+            const SizedBox(width: 8),
+            Expanded(flex: 55, child: menuPane),
+          ],
+        ),
       );
     } else {
       shell = Column(
         children: [
-          _mobileBar(context, ref, text),
-          const Expanded(flex: 4, child: AiPanel()),
-          const Divider(height: 1),
-          Expanded(flex: 6, child: body),
-          NavigationBar(
-            selectedIndex: menu.index,
-            onDestinationSelected: (index) {
-              ref.read(accountOpenProvider.notifier).close();
-              ref.read(menuProvider.notifier).select(AppMenu.values[index]);
-            },
-            destinations: [
-              for (final item in AppMenu.values)
-                NavigationDestination(icon: Icon(_icon(item)), label: text.menuName(item.name)),
-            ],
+          const SizedBox(height: 8),
+          Expanded(flex: 4, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: chat)),
+          const SizedBox(height: 8),
+          Expanded(flex: 6, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: menuPane)),
+          ComicNav(
+            selected: menu,
+            labels: labels,
+            showLabels: false,
+            axis: Axis.horizontal,
+            onSelect: (item) => selectIndex(item.index),
+            onAccount: () => ref.read(accountOpenProvider.notifier).open(),
           ),
         ],
       );
     }
 
-    return Stack(
-      children: [
-        shell,
-        const FloatingCalculator(),
-      ],
+    return Scaffold(
+      body: SafeArea(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            const DotPaper(),
+            shell,
+            const FloatingCalculator(),
+          ],
+        ),
+      ),
     );
   }
 
@@ -117,75 +135,6 @@ class ResponsiveShell extends ConsumerWidget {
       AppMenu.exchange => const ExchangeScreen(),
       AppMenu.news => const NewsScreen(),
       AppMenu.calculator => const CalculatorWidget(popupMode: false),
-    };
-  }
-
-  List<NavigationRailDestination> _destinations(AppText text) {
-    return [
-      for (final item in AppMenu.values)
-        NavigationRailDestination(icon: Icon(_icon(item)), label: Text(text.menuName(item.name))),
-    ];
-  }
-
-  Widget _desktopBar(BuildContext context, WidgetRef ref, AppText text, AppMenu menu) {
-    return Material(
-      color: const Color(0xFFF4F7F8),
-      child: Row(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (final item in AppMenu.values)
-                    TextButton(
-                      onPressed: () {
-                        ref.read(accountOpenProvider.notifier).close();
-                        ref.read(menuProvider.notifier).select(item);
-                      },
-                      child: Text(
-                        text.menuName(item.name),
-                        style: TextStyle(
-                          fontWeight: item == menu ? FontWeight.w800 : FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          TextButton(onPressed: () => ref.read(accountOpenProvider.notifier).open(), child: Text(text.myPage)),
-          TextButton(onPressed: () => FirebaseAuth.instance.signOut(), child: Text(text.logout)),
-        ],
-      ),
-    );
-  }
-
-  Widget _mobileBar(BuildContext context, WidgetRef ref, AppText text) {
-    return Material(
-      color: const Color(0xFFF4F7F8),
-      child: SafeArea(
-        bottom: false,
-        child: Row(
-          children: [
-            const SizedBox(width: 12),
-            Text(text.appTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
-            const Spacer(),
-            IconButton(tooltip: text.myPage, onPressed: () => ref.read(accountOpenProvider.notifier).open(), icon: const Icon(Icons.person)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  IconData _icon(AppMenu menu) {
-    return switch (menu) {
-      AppMenu.schedules => Icons.calendar_month,
-      AppMenu.balance => Icons.account_balance_wallet,
-      AppMenu.weather => Icons.wb_sunny,
-      AppMenu.exchange => Icons.currency_exchange,
-      AppMenu.news => Icons.newspaper,
-      AppMenu.calculator => Icons.calculate,
     };
   }
 }

@@ -267,7 +267,14 @@ async function fetchRss(country) {
     throw new HttpsError('unavailable', 'news-failed');
   }
   const xml = await response.text();
-  const parser = new XMLParser({ ignoreAttributes: false });
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    processEntities: {
+      enabled: true,
+      maxTotalExpansions: 50000,
+      maxExpandedLength: 1000000,
+    },
+  });
   const parsed = parser.parse(xml);
   let items = parsed?.rss?.channel?.item || [];
   if (!Array.isArray(items)) {
@@ -689,7 +696,7 @@ async function recentNews(uid, country) {
     .map((doc) => newsPayload(doc.id, doc.data()));
 }
 
-exports.getNews = onCall({ region }, async (request) => {
+exports.getNews = onCall({ region, invoker: 'public' }, async (request) => {
   const uid = requireUid(request);
   const country = String(request.data.country || '').toUpperCase() === 'JAPAN' ? 'JAPAN' : 'USA';
   const count = await storeNews(uid, country);

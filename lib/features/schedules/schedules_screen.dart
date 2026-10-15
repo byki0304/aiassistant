@@ -7,6 +7,7 @@ import '../../shared/api/assistant_api.dart';
 import '../../shared/app_text.dart';
 import '../../shared/logic/domain.dart';
 import '../../shared/state/providers.dart';
+import '../../shared/theme/ink_icons.dart';
 import '../../shared/widgets/selectable_list.dart';
 import '../../shared/errors.dart';
 
@@ -47,25 +48,49 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
                 onSelectionChanged: (value) => setState(() => _mode = value.first),
               ),
             ),
-            Expanded(flex: 3, child: _calendar(items, locale)),
             Expanded(
-              flex: 2,
-              child: SelectableList(
-                title: text.menuName('schedules'),
-                rows: [
-                  for (final item in items)
-                    SelectableRow(
-                      id: item.id,
-                      child: Text('${item.title}  ${DateFormat.MMMd(locale).add_Hm().format(item.startAt.toLocal())}'),
-                    ),
-                ],
-                emptyText: text.emptyData,
-                selectAllLabel: text.selectAll,
-                deleteLabel: text.delete,
-                selectedLabel: text.selectedCount,
-                confirmLabel: text.deleteConfirm,
-                cancelLabel: text.cancel,
-                onDelete: (ids) => ref.read(apiProvider).deleteByIds('schedules', ids),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final calendarHeight = switch (_mode) {
+                    ScheduleMode.month => 300.0,
+                    ScheduleMode.year => 260.0,
+                    ScheduleMode.week => 150.0,
+                    ScheduleMode.day => 180.0,
+                  };
+                  const listHeight = 168.0;
+                  final list = SelectableList(
+                    title: text.menuName('schedules'),
+                    rows: [
+                      for (final item in items)
+                        SelectableRow(
+                          id: item.id,
+                          child: Text('${item.title}  ${DateFormat.MMMd(locale).add_Hm().format(item.startAt.toLocal())}'),
+                        ),
+                    ],
+                    emptyText: text.emptyData,
+                    selectAllLabel: text.selectAll,
+                    deleteLabel: text.delete,
+                    selectedLabel: text.selectedCount,
+                    confirmLabel: text.deleteConfirm,
+                    cancelLabel: text.cancel,
+                    onDelete: (ids) => ref.read(apiProvider).deleteByIds('schedules', ids),
+                  );
+                  final calendar = _calendar(items, locale);
+                  if (constraints.maxHeight >= calendarHeight + listHeight) {
+                    return Column(
+                      children: [
+                        SizedBox(height: calendarHeight, child: calendar),
+                        Expanded(child: list),
+                      ],
+                    );
+                  }
+                  return ListView(
+                    children: [
+                      SizedBox(height: calendarHeight, child: calendar),
+                      SizedBox(height: listHeight, child: list),
+                    ],
+                  );
+                },
               ),
             ),
           ],
@@ -85,11 +110,20 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
                 _focused = DateTime(_focused.year, month);
                 _mode = ScheduleMode.month;
               }),
-              child: Card(
-                child: Center(
-                  child: Text(
-                    DateFormat.MMM(locale).format(DateTime(_focused.year, month)),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: InkPalette.cream,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: InkPalette.ink, width: 2),
+                    boxShadow: const [BoxShadow(color: InkPalette.ink, offset: Offset(3, 3))],
+                  ),
+                  child: Center(
+                    child: Text(
+                      DateFormat.MMM(locale).format(DateTime(_focused.year, month)),
+                      style: const TextStyle(fontWeight: FontWeight.w800, color: InkPalette.ink),
+                    ),
                   ),
                 ),
               ),
@@ -110,11 +144,43 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
         ],
       );
     }
-    return TableCalendar<ScheduleItem>(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const header = 44.0;
+        const daysOfWeek = 16.0;
+        final rows = _mode == ScheduleMode.week ? 1 : 6;
+        final available = constraints.maxHeight.isFinite ? constraints.maxHeight : 320.0;
+        final rowHeight = ((available - header - daysOfWeek) / rows).clamp(28.0, 42.0);
+        return TableCalendar<ScheduleItem>(
       firstDay: DateTime.utc(2020),
       lastDay: DateTime.utc(2036),
       focusedDay: _focused,
+      rowHeight: rowHeight,
+      daysOfWeekHeight: daysOfWeek,
       calendarFormat: _mode == ScheduleMode.week ? CalendarFormat.week : CalendarFormat.month,
+      headerStyle: const HeaderStyle(
+        formatButtonVisible: false,
+        titleCentered: true,
+        headerPadding: EdgeInsets.symmetric(vertical: 4),
+        titleTextStyle: TextStyle(fontWeight: FontWeight.w800, color: InkPalette.ink),
+      ),
+      daysOfWeekStyle: const DaysOfWeekStyle(
+        weekdayStyle: TextStyle(color: InkPalette.ink, fontWeight: FontWeight.w800, fontSize: 12),
+        weekendStyle: TextStyle(color: InkPalette.coral, fontWeight: FontWeight.w800, fontSize: 12),
+      ),
+      calendarStyle: CalendarStyle(
+        defaultTextStyle: const TextStyle(color: InkPalette.ink, fontWeight: FontWeight.w700),
+        weekendTextStyle: const TextStyle(color: InkPalette.coral, fontWeight: FontWeight.w700),
+        todayDecoration: const BoxDecoration(color: InkPalette.coral, shape: BoxShape.circle),
+        todayTextStyle: const TextStyle(color: InkPalette.cream, fontWeight: FontWeight.w800),
+        selectedDecoration: BoxDecoration(
+          color: InkPalette.mustard,
+          shape: BoxShape.circle,
+          border: Border.all(color: InkPalette.ink, width: 2),
+        ),
+        selectedTextStyle: const TextStyle(color: InkPalette.ink, fontWeight: FontWeight.w800),
+        markerDecoration: const BoxDecoration(color: InkPalette.teal, shape: BoxShape.circle),
+      ),
       availableCalendarFormats: const {
         CalendarFormat.month: 'month',
         CalendarFormat.week: 'week',
@@ -124,6 +190,8 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
       onPageChanged: (focused) => _focused = focused,
       eventLoader: (day) => items.where((item) => _sameSeoulDay(item.startAt, day)).toList(),
       startingDayOfWeek: StartingDayOfWeek.monday,
+        );
+      },
     );
   }
 

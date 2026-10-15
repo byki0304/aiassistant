@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/ink_icons.dart';
+
 class SelectableRow {
   const SelectableRow({required this.id, required this.child});
 
@@ -86,7 +88,7 @@ class _SelectableListState extends State<SelectableList> {
       children: [
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          color: const Color(0xFFE7EEF0),
+          color: InkPalette.blush,
           child: Row(
             children: [
               Expanded(child: Text(widget.title, style: const TextStyle(fontWeight: FontWeight.w700))),
@@ -97,7 +99,7 @@ class _SelectableListState extends State<SelectableList> {
                 ),
               FilledButton(
                 style: FilledButton.styleFrom(
-                  backgroundColor: _hasSelection ? const Color(0xFF9F1239) : const Color(0xFF0F4C5C),
+                  backgroundColor: _hasSelection ? InkPalette.coral : InkPalette.ink,
                 ),
                 onPressed: widget.rows.isEmpty || _busy ? null : _onAction,
                 child: Text(_hasSelection ? widget.deleteLabel : widget.selectAllLabel),
@@ -115,7 +117,7 @@ class _SelectableListState extends State<SelectableList> {
                     final row = widget.rows[index];
                     final checked = _selected.contains(row.id);
                     return Material(
-                      color: checked ? const Color(0xFFFFF6D8) : Colors.white,
+                      color: checked ? InkPalette.mustard : InkPalette.cream,
                       child: InkWell(
                         onTap: () => setState(() {
                           if (checked) {
