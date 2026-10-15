@@ -33,14 +33,15 @@ Firestore TTL 정책은 사용자가 콘솔에서 만듭니다.
 
 ## 서버 비밀
 
-키는 `functions/.env`에만 둡니다. 이 파일은 git에 올리지 않습니다. 예시 이름은 `functions/.env.example` 입니다.
+`GEMINI_MODEL`만 `functions/.env`에 둡니다. 이 값은 배포되는 일반 환경 변수이고, 기본 모델은 `gemini-3.8-flash` 입니다.
+
+API 키는 `functions/.secret.local`에 둡니다. 이 파일은 배포되지 않고 git에도 올리지 않습니다. 같은 이름의 값이 Secret Manager에 있어야 배포된 함수가 읽습니다.
 
 - `OPENWEATHER_API_KEY`
 - `EXCHANGE_RATE_API_KEY`
 - `GEMINI_API_KEY` — Google AI Studio의 Gemini API 키. 비어 있으면 대화 분류와 뉴스 스크립트가 실패합니다.
-- `GEMINI_MODEL` 기본값 `gemini-3.8-flash`
 
-`submitPrompt`와 `scriptNews`는 `GEMINI_API_KEY`를 Secret Manager 비밀로 읽습니다. 날씨·환율 키도 같은 방식입니다. 로컬 에뮬레이터는 `functions/.env`를 읽습니다.
+`submitPrompt`와 `scriptNews`는 `GEMINI_API_KEY`를 비밀로 읽습니다. 날씨·환율 함수도 같은 방식입니다. 키를 `.env`에 두면 비밀과 일반 환경 변수가 겹쳐 배포가 거절됩니다.
 
 ```bash
 firebase functions:secrets:set OPENWEATHER_API_KEY
