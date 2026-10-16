@@ -6,11 +6,18 @@
       "ignore": ["node_modules", ".git", "*.local", ".env", ".env.*"]
     }
   ],
-  "firestore": {
-    "database": "aiassistant",
-    "rules": "firestore.rules",
-    "indexes": "firestore.indexes.json"
-  },
+  "firestore": [
+    {
+      "database": "aiassistant",
+      "rules": "firestore.rules",
+      "indexes": "firestore.indexes.json"
+    },
+    {
+      "database": "aiassistant-backup",
+      "rules": "firestore.backup.rules",
+      "indexes": "firestore.backup.indexes.json"
+    }
+  ],
   "storage": {
     "rules": "storage.rules"
   }

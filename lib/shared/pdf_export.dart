@@ -29,10 +29,7 @@ Future<void> downloadScriptPdf({required String title, required String body}) as
     ),
   );
   final bytes = await doc.save();
-  final blob = Blob(
-    [bytes.toJS].toJS,
-    BlobPropertyBag(type: 'application/pdf'),
-  );
+  final blob = Blob([bytes.toJS].toJS, BlobPropertyBag(type: 'application/pdf'));
   final url = URL.createObjectURL(blob);
   final anchor = document.createElement('a') as HTMLAnchorElement
     ..href = url

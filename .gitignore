@@ -40,6 +40,10 @@ functions/.env.*
 **/*serviceAccount*.json
 **/*-firebase-adminsdk-*.json
 
+# Full-size design sources stay local; compact WebP copies and assets/ are committed.
+design/ux-concept/*.png
+design/ux-concept/*.mp4
+
 # Symbolication related
 app.*.symbols
 

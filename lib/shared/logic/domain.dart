@@ -17,8 +17,7 @@ class SeoulClock {
 
   static DateTime addWeeks(DateTime weekStartUtc, int weeks) {
     final seoul = toSeoul(weekStartUtc);
-    final shifted = DateTime.utc(seoul.year, seoul.month, seoul.day)
-        .add(Duration(days: 7 * weeks));
+    final shifted = DateTime.utc(seoul.year, seoul.month, seoul.day).add(Duration(days: 7 * weeks));
     return seoulMidnightToUtc(shifted.year, shifted.month, shifted.day);
   }
 
@@ -29,12 +28,7 @@ class SeoulClock {
 }
 
 class BalancePoint {
-  const BalancePoint({
-    required this.id,
-    required this.occurredAt,
-    required this.amount,
-    required this.isIncome,
-  });
+  const BalancePoint({required this.id, required this.occurredAt, required this.amount, required this.isIncome});
 
   final String id;
   final DateTime occurredAt;
@@ -44,7 +38,8 @@ class BalancePoint {
 
 /// Income adds and expense subtracts, ordered by occurredAt then id.
 Map<String, int> runningBalances(List<BalancePoint> items) {
-  final sorted = [...items]..sort((a, b) {
+  final sorted = [...items]
+    ..sort((a, b) {
       final byTime = a.occurredAt.compareTo(b.occurredAt);
       if (byTime != 0) {
         return byTime;
@@ -61,11 +56,7 @@ Map<String, int> runningBalances(List<BalancePoint> items) {
 }
 
 class WeekTotals {
-  const WeekTotals({
-    required this.income,
-    required this.expense,
-    required this.net,
-  });
+  const WeekTotals({required this.income, required this.expense, required this.net});
 
   final int income;
   final int expense;
@@ -98,15 +89,7 @@ int remainingHours(DateTime expireAt, DateTime now) {
   return hours;
 }
 
-const allowedMenus = {
-  'schedule',
-  'balance',
-  'weather',
-  'exchange',
-  'news',
-  'calculator',
-  'general',
-};
+const allowedMenus = {'schedule', 'balance', 'weather', 'exchange', 'news', 'calculator', 'general'};
 
 const allowedSaveModes = {'auto', 'confirm', 'none'};
 
@@ -143,11 +126,7 @@ class TableModel {
 }
 
 class ChartModel {
-  const ChartModel({
-    required this.type,
-    required this.labels,
-    required this.values,
-  });
+  const ChartModel({required this.type, required this.labels, required this.values});
 
   final String type;
   final List<String> labels;
@@ -155,12 +134,7 @@ class ChartModel {
 
   bool get isEmpty => labels.isEmpty || labels.length != values.length;
 
-  Map<String, dynamic> toJson() => {
-        'hasChart': !isEmpty,
-        'type': type,
-        'labels': labels,
-        'values': values,
-      };
+  Map<String, dynamic> toJson() => {'hasChart': !isEmpty, 'type': type, 'labels': labels, 'values': values};
 
   static ChartModel? fromJson(Object? raw) {
     if (raw is! Map) {
@@ -193,12 +167,7 @@ class ChartModel {
 }
 
 class ScheduleDraft {
-  const ScheduleDraft({
-    required this.title,
-    required this.startAt,
-    required this.endAt,
-    required this.allDay,
-  });
+  const ScheduleDraft({required this.title, required this.startAt, required this.endAt, required this.allDay});
 
   final String title;
   final DateTime? startAt;
@@ -206,11 +175,11 @@ class ScheduleDraft {
   final bool allDay;
 
   Map<String, dynamic> toJson() => {
-        'title': title,
-        'startAt': startAt?.toIso8601String(),
-        'endAt': endAt?.toIso8601String(),
-        'allDay': allDay,
-      };
+    'title': title,
+    'startAt': startAt?.toIso8601String(),
+    'endAt': endAt?.toIso8601String(),
+    'allDay': allDay,
+  };
 
   static ScheduleDraft? fromJson(Object? raw) {
     if (raw is! Map) {
@@ -230,12 +199,7 @@ class ScheduleDraft {
 }
 
 class BalanceDraft {
-  const BalanceDraft({
-    required this.description,
-    required this.amount,
-    required this.isIncome,
-    required this.occurredAt,
-  });
+  const BalanceDraft({required this.description, required this.amount, required this.isIncome, required this.occurredAt});
 
   final String description;
   final int amount;
@@ -243,20 +207,18 @@ class BalanceDraft {
   final DateTime? occurredAt;
 
   Map<String, dynamic> toJson() => {
-        'description': description,
-        'amount': amount,
-        'isIncome': isIncome,
-        'occurredAt': occurredAt?.toIso8601String(),
-      };
+    'description': description,
+    'amount': amount,
+    'isIncome': isIncome,
+    'occurredAt': occurredAt?.toIso8601String(),
+  };
 
   static BalanceDraft? fromJson(Object? raw) {
     if (raw is! Map) {
       return null;
     }
     final description = '${raw['description'] ?? ''}'.trim();
-    final amount = raw['amount'] is num
-        ? (raw['amount'] as num).round()
-        : int.tryParse('${raw['amount']}'.replaceAll(',', '')) ?? 0;
+    final amount = raw['amount'] is num ? (raw['amount'] as num).round() : int.tryParse('${raw['amount']}'.replaceAll(',', '')) ?? 0;
     if (description.isEmpty || amount <= 0) {
       return null;
     }
@@ -336,8 +298,7 @@ IntentPayload parseIntent(Object? raw) {
     schedule: ScheduleDraft.fromJson(raw['schedule']),
     balance: BalanceDraft.fromJson(raw['balance']),
     cityQuery: '${raw['weather'] is Map ? (raw['weather'] as Map)['cityQuery'] ?? '' : ''}',
-    currencyCode:
-        '${raw['exchange'] is Map ? (raw['exchange'] as Map)['currencyCode'] ?? '' : ''}',
+    currencyCode: '${raw['exchange'] is Map ? (raw['exchange'] as Map)['currencyCode'] ?? '' : ''}',
     newsCountry: '${raw['news'] is Map ? (raw['news'] as Map)['country'] ?? '' : ''}',
     extractedSchedules: extractedSchedules,
     extractedBalances: extractedBalances,
@@ -383,15 +344,6 @@ const currencies = [
   CurrencyPreset('MYR', 'Malaysia링깃', 'Malaysian ringgit', 'マレーシアリンギット'),
 ];
 
-const allowedExtensions = {
-  'txt',
-  'pdf',
-  'doc',
-  'docx',
-  'xls',
-  'xlsx',
-  'ppt',
-  'pptx',
-};
+const allowedExtensions = {'txt', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'};
 
 const maxUploadBytes = 20 * 1024 * 1024;

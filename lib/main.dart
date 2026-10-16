@@ -1,4 +1,3 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -6,12 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
+import 'features/auth/intro_screen.dart';
+import 'features/auth/login_screen.dart';
 import 'firebase_options.dart';
-import 'pages/responsive_shell.dart';
-import 'shared/app_text.dart';
+import 'pages/app_shell.dart';
 import 'shared/state/providers.dart';
-import 'shared/theme/ink_icons.dart';
-import 'shared/theme/ink_theme.dart';
+import 'shared/theme/toon.dart';
+import 'shared/theme/toon_widgets.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,7 +26,7 @@ class AiAssistantApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final locale = ref.watch(localeProvider);
-    final seed = ThemeData(useMaterial3: true, scaffoldBackgroundColor: InkPalette.paper);
+    final seed = ThemeData(useMaterial3: true);
     final textTheme = switch (locale.languageCode) {
       'ja' => GoogleFonts.notoSansJpTextTheme(seed.textTheme),
       'en' => GoogleFonts.notoSansTextTheme(seed.textTheme),
@@ -42,71 +42,53 @@ class AiAssistantApp extends ConsumerWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      theme: inkTheme(textTheme),
-      home: const AuthGate(),
+      theme: toonTheme(textTheme),
+      home: const AppGate(),
     );
   }
 }
 
-class AuthGate extends ConsumerWidget {
-  const AuthGate({super.key});
+/// Intro video (once per launch, if enabled), then login when signed out, then the app.
+class AppGate extends ConsumerStatefulWidget {
+  const AppGate({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final text = AppText.of(Localizations.localeOf(context));
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
-        }
-        final user = snapshot.data;
-        if (user == null) {
-          return _AnonymousSignIn(message: text.signingIn, failure: text.authFailed);
-        }
-        return const ResponsiveShell();
-      },
-    );
-  }
+  ConsumerState<AppGate> createState() => _AppGateState();
 }
 
-class _AnonymousSignIn extends StatefulWidget {
-  const _AnonymousSignIn({required this.message, required this.failure});
-
-  final String message;
-  final String failure;
-
-  @override
-  State<_AnonymousSignIn> createState() => _AnonymousSignInState();
-}
-
-class _AnonymousSignInState extends State<_AnonymousSignIn> {
-  Object? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _signIn();
-  }
-
-  Future<void> _signIn() async {
-    try {
-      await FirebaseAuth.instance.signInAnonymously();
-    } catch (error) {
-      if (mounted) {
-        setState(() => _error = error);
-      }
-    }
-  }
+class _AppGateState extends ConsumerState<AppGate> {
+  bool _introDone = false;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(_error == null ? widget.message : widget.failure, textAlign: TextAlign.center),
-        ),
+    final introEnabled = ref.watch(introEnabledProvider);
+    final user = ref.watch(authUserProvider);
+    final Widget page;
+    if (introEnabled && !_introDone) {
+      page = IntroScreen(key: const ValueKey('intro'), onDone: () => setState(() => _introDone = true));
+    } else if (user.isLoading && !user.hasValue) {
+      page = const _Splash(key: ValueKey('splash'));
+    } else if (user.value == null) {
+      page = const LoginScreen(key: ValueKey('login'));
+    } else {
+      page = const AppShell(key: ValueKey('shell'));
+    }
+    return AnimatedSwitcher(duration: const Duration(milliseconds: 380), child: page);
+  }
+}
+
+class _Splash extends StatelessWidget {
+  const _Splash({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          ToonBackground(),
+          Center(child: RobotArt(RobotPose.run, height: 120, bob: true)),
+        ],
       ),
     );
   }

@@ -7,87 +7,152 @@ import '../../shared/app_text.dart';
 import '../../shared/errors.dart';
 import '../../shared/pdf_export.dart';
 import '../../shared/state/providers.dart';
+import '../../shared/theme/toon.dart';
+import '../../shared/theme/toon_icons.dart';
+import '../../shared/theme/toon_widgets.dart';
+import '../../shared/widgets/menu_body.dart';
 import '../../shared/widgets/selectable_list.dart';
 
-class NewsScreen extends ConsumerWidget {
+class NewsScreen extends ConsumerStatefulWidget {
   const NewsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final text = AppText.of(Localizations.localeOf(context));
-    final asyncItems = ref.watch(newsProvider);
-    final locale = Localizations.localeOf(context).toString();
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: Row(
-            children: [
-              Expanded(child: FilledButton(onPressed: () => _load(context, ref, text, 'USA'), child: Text(text.usNews))),
-              const SizedBox(width: 8),
-              Expanded(child: FilledButton(onPressed: () => _load(context, ref, text, 'JAPAN'), child: Text(text.jpNews))),
-            ],
-          ),
-        ),
-        Expanded(
-          child: asyncItems.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (error, _) => Center(child: Text(explainError(error, text))),
-            data: (items) => SelectableList(
-              title: text.menuName('news'),
-              rows: [
-                for (final item in items)
-                  SelectableRow(
-                    id: item.id,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-                              Text('${item.country} · ${item.source} · ${DateFormat.MMMd(locale).format(item.publishedAt.toLocal())}', style: const TextStyle(fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                        TextButton(onPressed: () => _script(context, ref, text, item), child: Text(text.script)),
-                      ],
-                    ),
-                  ),
-              ],
-              emptyText: text.emptyData,
-              selectAllLabel: text.selectAll,
-              deleteLabel: text.delete,
-              selectedLabel: text.selectedCount,
-              confirmLabel: text.deleteConfirm,
-              cancelLabel: text.cancel,
-              onDelete: (ids) => ref.read(apiProvider).deleteByIds('news_items', ids),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
+  ConsumerState<NewsScreen> createState() => _NewsScreenState();
+}
 
-  Future<void> _load(BuildContext context, WidgetRef ref, AppText text, String country) async {
+class _NewsScreenState extends ConsumerState<NewsScreen> {
+  String? _busy;
+
+  Future<void> _load(AppText text, String country) async {
+    setState(() => _busy = country);
     try {
       await ref.read(apiProvider).getNews(country);
     } catch (error) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(explainError(error, text))));
+      if (mounted) {
+        showToonMessage(context, explainError(error, text));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = null);
       }
     }
   }
 
-  Future<void> _script(BuildContext context, WidgetRef ref, AppText text, NewsItem item) async {
+  Future<void> _script(AppText text, NewsItem item) async {
+    setState(() => _busy = item.id);
     try {
       final locale = Localizations.localeOf(context).languageCode;
       final script = await ref.read(apiProvider).scriptNews(newsId: item.id, locale: locale);
       await downloadScriptPdf(title: item.title, body: script);
     } catch (error) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(explainError(error, text))));
+      if (mounted) {
+        showToonMessage(context, explainError(error, text));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = null);
       }
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = AppText.of(Localizations.localeOf(context));
+    final locale = Localizations.localeOf(context).toString();
+
+    Widget countryButton(String country, String label, ToonGlyph flag, Color color) {
+      return ToonButton(
+        label: label,
+        subtitle: _busy == country ? '…' : text.latestFive,
+        glyph: flag,
+        color: color,
+        textColor: Toon.white,
+        onPressed: _busy == null ? () => _load(text, country) : null,
+      );
+    }
+
+    final tools = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ToonTitle(text.newsHeadline, dot: Toon.lilac, size: 14.5),
+        const SizedBox(height: 10),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final us = countryButton('USA', text.usNews, ToonGlyph.flagUs, Toon.navy);
+            final jp = countryButton('JAPAN', text.jpNews, ToonGlyph.flagJp, Toon.red);
+            if (constraints.maxWidth < 300) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [us, const SizedBox(height: 10), jp, const SizedBox(height: 14), const RobotArt(RobotPose.point, height: 90)],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: us),
+                const SizedBox(width: 10),
+                Expanded(child: jp),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+
+    final records = ref
+        .watch(newsProvider)
+        .when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) => LoadFailure(error),
+          data: (items) => SelectableList(
+            title: text.newsArchive,
+            dot: Toon.lilac,
+            emptyPose: RobotPose.point,
+            rows: [
+              for (final item in items)
+                SelectableRow(
+                  id: item.id,
+                  child: Row(
+                    children: [
+                      ToonIcon(item.country == 'JAPAN' ? ToonGlyph.flagJp : ToonGlyph.flagUs, size: 26),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontWeight: FontWeight.w800, height: 1.3),
+                            ),
+                            Text(
+                              '${item.source} · ${DateFormat.MMMd(locale).add_Hm().format(item.publishedAt.toLocal())}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 11.5, color: Toon.inkSoft, fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      ToonButton(
+                        label: text.script,
+                        glyph: _busy == item.id ? ToonGlyph.cloudSync : ToonGlyph.news,
+                        compact: true,
+                        color: Toon.lilac,
+                        onPressed: _busy == null ? () => _script(text, item) : null,
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+            emptyText: text.emptyData,
+            selectAllLabel: text.selectAll,
+            deleteLabel: text.delete,
+            onDelete: (ids) => ref.read(apiProvider).deleteByIds('news_items', ids),
+          ),
+        );
+
+    return MenuBody(tools: tools, records: records, toolsShare: 0.34);
   }
 }

@@ -5,6 +5,9 @@ class CalcEngine {
   bool _replace = true;
   bool hasError = false;
 
+  /// "a op b = result" for the calculation the last [equals] finished; not carried over by [duplicate].
+  String? lastRecord;
+
   void inputDigit(String digit) {
     if (hasError) {
       clear();
@@ -65,7 +68,9 @@ class CalcEngine {
     if (current == null) {
       return;
     }
+    final expression = '${formatCalc(_accumulator!)} $_operator ${formatCalc(current)}';
     if (_apply(current)) {
+      lastRecord = '$expression = $display';
       _operator = null;
       _accumulator = null;
       _replace = true;

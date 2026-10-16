@@ -1,4 +1,5 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue, Timestamp } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
@@ -17,8 +18,35 @@ const geminiApiKey = defineSecret('GEMINI_API_KEY');
 const region = 'asia-northeast3';
 const databaseId = 'aiassistant';
 
+// Firebase (Firestore `aiassistant`) is the primary store; every user document is mirrored
+// into the Google Cloud Firestore database `aiassistant-backup`, which serves reads only
+// when the primary is unreachable.
+const backupDatabaseId = 'aiassistant-backup';
+const mirroredCollections = ['schedules', 'balance_entries', 'news_items', 'weather_logs', 'exchange_logs', 'turns'];
+
 function db() {
   return getFirestore(databaseId);
+}
+
+function backupDb() {
+  return getFirestore(backupDatabaseId);
+}
+
+function backupCol(uid, name) {
+  return backupDb().collection('users').doc(uid).collection(name);
+}
+
+function plain(value) {
+  if (value instanceof Timestamp) {
+    return value.toDate().toISOString();
+  }
+  if (Array.isArray(value)) {
+    return value.map(plain);
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, plain(item)]));
+  }
+  return value;
 }
 const ttlMs = 120 * 60 * 60 * 1000;
 
@@ -102,6 +130,68 @@ async function saveSchedule(uid, draft) {
   return ref.id;
 }
 
+/** Moves an existing schedule to the new time; a missing end keeps the old duration. */
+async function rescheduleSchedule(uid, targetId, draft) {
+  const ref = userCol(uid, 'schedules').doc(String(targetId || 'missing'));
+  const snap = await ref.get();
+  if (!snap.exists) {
+    return null;
+  }
+  const allDay = typeof draft?.allDay === 'boolean' ? draft.allDay : snap.get('allDay') === true;
+  const start = parseWhen(draft?.startAt, allDay ? 0 : 9, 0);
+  if (!start) {
+    return null;
+  }
+  const oldStart = snap.get('startAt').toDate();
+  const oldEnd = snap.get('endAt').toDate();
+  let end = parseWhen(draft?.endAt, allDay ? 23 : 10, allDay ? 59 : 0);
+  if (!end || end <= start) {
+    end = new Date(start.getTime() + Math.max(oldEnd.getTime() - oldStart.getTime(), 30 * 60 * 1000));
+  }
+  await ref.update({
+    startAt: Timestamp.fromDate(start),
+    endAt: Timestamp.fromDate(end),
+    allDay,
+    movedFrom: Timestamp.fromDate(oldStart),
+    cancelled: false,
+    updatedAt: Timestamp.fromDate(new Date()),
+  });
+  await audit(uid, 'reschedule', ref.id, ['startAt', 'endAt', 'movedFrom']);
+  return ref.id;
+}
+
+async function cancelSchedule(uid, targetId) {
+  const ref = userCol(uid, 'schedules').doc(String(targetId || 'missing'));
+  const snap = await ref.get();
+  if (!snap.exists) {
+    return null;
+  }
+  await ref.update({ cancelled: true, cancelledAt: Timestamp.fromDate(new Date()) });
+  await audit(uid, 'cancel', ref.id, ['cancelled']);
+  return ref.id;
+}
+
+function seoulIso(date) {
+  return new Date(date.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 16) + '+09:00';
+}
+
+/** Schedules the model may move or cancel: 60 days back to a year ahead, as `id | title | start | state` lines. */
+async function scheduleContext(uid) {
+  const now = Date.now();
+  const snap = await userCol(uid, 'schedules')
+    .where('startAt', '>=', Timestamp.fromDate(new Date(now - 60 * 24 * 60 * 60 * 1000)))
+    .where('startAt', '<=', Timestamp.fromDate(new Date(now + 400 * 24 * 60 * 60 * 1000)))
+    .orderBy('startAt')
+    .limit(120)
+    .get();
+  return snap.docs
+    .map((doc) => {
+      const title = String(doc.get('title') || '').replace(/[|\n]/g, ' ');
+      return `${doc.id} | ${title} | ${seoulIso(doc.get('startAt').toDate())} | ${doc.get('cancelled') === true ? 'cancelled' : 'active'}`;
+    })
+    .join('\n');
+}
+
 async function recalculateBalances(uid) {
   const snap = await userCol(uid, 'balance_entries').orderBy('occurredAt').orderBy('__name__').get();
   let running = 0;
@@ -123,10 +213,15 @@ async function recalculateBalances(uid) {
   }
 }
 
-async function saveBalance(uid, draft) {
+function balanceAmount(value) {
+  const amount = Math.round(Number(String(value ?? '').replace(/,/g, '')));
+  return Number.isFinite(amount) && amount > 0 && amount <= 1e12 ? amount : null;
+}
+
+async function saveBalance(uid, draft, { recalculate = true } = {}) {
   const description = String(draft?.description || '').trim().slice(0, 200);
-  const amount = Math.round(Number(String(draft?.amount ?? '').replace(/,/g, '')));
-  if (!description || !Number.isFinite(amount) || amount <= 0 || amount > 1e12) {
+  const amount = balanceAmount(draft?.amount);
+  if (!description || amount == null) {
     return null;
   }
   const occurred = parseWhen(draft.occurredAt, 12, 0) || new Date();
@@ -140,9 +235,88 @@ async function saveBalance(uid, draft) {
     runningBalance: 0,
     createdAt: Timestamp.fromDate(new Date()),
   });
-  await recalculateBalances(uid);
+  if (recalculate) {
+    await recalculateBalances(uid);
+  }
   await audit(uid, 'create', ref.id, ['description', 'amount', 'isIncome', 'occurredAt']);
   return ref.id;
+}
+
+/** Corrects the fields the model gave for an existing entry; the caller recalculates balances. */
+async function updateBalance(uid, targetId, draft) {
+  const ref = userCol(uid, 'balance_entries').doc(String(targetId || 'missing'));
+  const snap = await ref.get();
+  if (!snap.exists) {
+    return null;
+  }
+  const changes = {};
+  const description = String(draft?.description || '').trim().slice(0, 200);
+  if (description) {
+    changes.description = description;
+  }
+  const amount = balanceAmount(draft?.amount);
+  if (amount != null) {
+    changes.amount = amount;
+  }
+  if (typeof draft?.isIncome === 'boolean') {
+    changes.isIncome = draft.isIncome;
+  }
+  const occurred = parseWhen(draft?.occurredAt, 12, 0);
+  if (occurred) {
+    changes.occurredAt = Timestamp.fromDate(occurred);
+  }
+  if (Object.keys(changes).length === 0) {
+    return null;
+  }
+  await ref.update({ ...changes, updatedAt: Timestamp.fromDate(new Date()) });
+  await audit(uid, 'update', ref.id, Object.keys(changes));
+  return ref.id;
+}
+
+async function deleteBalance(uid, targetId) {
+  const ref = userCol(uid, 'balance_entries').doc(String(targetId || 'missing'));
+  const snap = await ref.get();
+  if (!snap.exists) {
+    return null;
+  }
+  await ref.delete();
+  await audit(uid, 'delete', ref.id, ['id']);
+  return ref.id;
+}
+
+/** Applies the model's ledger changes in order and recalculates once; returns how many took effect. */
+async function applyBalanceChanges(uid, changes) {
+  let applied = 0;
+  for (const change of changes.slice(0, 20)) {
+    const id = change?.action === 'delete'
+      ? await deleteBalance(uid, change.targetId)
+      : change?.action === 'update'
+        ? await updateBalance(uid, change.targetId, change)
+        : await saveBalance(uid, change, { recalculate: false });
+    if (id) {
+      applied += 1;
+    }
+  }
+  if (applied > 0) {
+    await recalculateBalances(uid);
+  }
+  return applied;
+}
+
+/** Recent ledger entries the model may correct or remove, as `id | description | in/out | amount | when` lines. */
+async function balanceContext(uid) {
+  const snap = await userCol(uid, 'balance_entries')
+    .where('occurredAt', '>=', Timestamp.fromDate(new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)))
+    .orderBy('occurredAt', 'desc')
+    .limit(80)
+    .get();
+  return snap.docs
+    .map((doc) => {
+      const description = String(doc.get('description') || '').replace(/[|\n]/g, ' ');
+      const kind = doc.get('isIncome') === true ? 'income' : 'expense';
+      return `${doc.id} | ${description} | ${kind} | ${doc.get('amount')} | ${seoulIso(doc.get('occurredAt').toDate())}`;
+    })
+    .join('\n');
 }
 
 async function purgeExpired(uid, name) {
@@ -373,19 +547,26 @@ const responseSchema = {
     schedule: {
       type: 'OBJECT',
       properties: {
+        action: { type: 'STRING', format: 'enum', enum: ['create', 'reschedule', 'cancel'] },
+        targetId: { type: 'STRING' },
         title: { type: 'STRING' },
         startAt: { type: 'STRING' },
         endAt: { type: 'STRING' },
         allDay: { type: 'BOOLEAN' },
       },
     },
-    balance: {
-      type: 'OBJECT',
-      properties: {
-        description: { type: 'STRING' },
-        amount: { type: 'INTEGER' },
-        isIncome: { type: 'BOOLEAN' },
-        occurredAt: { type: 'STRING' },
+    balances: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          action: { type: 'STRING', format: 'enum', enum: ['create', 'update', 'delete'] },
+          targetId: { type: 'STRING' },
+          description: { type: 'STRING' },
+          amount: { type: 'INTEGER' },
+          isIncome: { type: 'BOOLEAN' },
+          occurredAt: { type: 'STRING' },
+        },
       },
     },
     weather: { type: 'OBJECT', properties: { cityQuery: { type: 'STRING' } } },
@@ -419,19 +600,30 @@ const responseSchema = {
   required: ['targetMenu', 'saveMode', 'summaryText'],
 };
 
-async function askGemini(locale, source, text, documentText) {
+async function askGemini(locale, source, text, documentText, schedules, ledger) {
   const key = geminiKey();
   if (!key) {
     throw new HttpsError('failed-precondition', 'gemini-missing');
   }
   const model = geminiModel();
+  const now = new Date();
+  const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'Asia/Seoul' }).format(now);
   const prompt = [
     'You route a personal work assistant. Return only JSON for the schema.',
     `Write summaryText in locale ${locale}.`,
-    'saveMode auto only for one clear schedule, one clear balance entry, or a weather, exchange, or news lookup.',
+    `Now in Asia/Seoul: ${seoulIso(now)} (${weekday}). Resolve relative dates such as tomorrow or the day after tomorrow from this.`,
+    'saveMode auto only for one clear schedule, clearly stated income or expense entries, or a weather, exchange, or news lookup.',
     'If source is file and you find schedules or amounts, saveMode must be confirm. Do not invent weather, rates, or headlines.',
     'Schedule times use ISO-8601. A date without a time means 09:00-10:00 Asia/Seoul.',
+    'For targetMenu schedule set schedule.action: create for a new event; reschedule when the user moves an existing event to another date or time;',
+    'cancel when the user says an existing event is cancelled or called off. For reschedule and cancel, schedule.targetId must be the id of the',
+    'existing schedule below that the user means, and reschedule needs the new startAt (and endAt when given). Keep title short and specific.',
     'Balance amount is a positive integer KRW.',
+    'For targetMenu balance put one item in balances per income or expense the user states, with action create; money spent or paid is',
+    'isIncome false, money received is isIncome true; occurredAt is when it happened, or now if not said. Use action update with targetId',
+    'when the user corrects an existing ledger entry below, and action delete with targetId when they ask to remove one.',
+    `existing schedules (id | title | start | state):\n${schedules || '(none)'}`,
+    `existing ledger entries (id | description | kind | amount | when):\n${ledger || '(none)'}`,
     `source: ${source}`,
     `user: ${text || ''}`,
     `document: ${(documentText || '').slice(0, 30000)}`,
@@ -494,6 +686,9 @@ async function writeTurn(uid, turn) {
     table: turn.table || null,
     chart: turn.chart && turn.chart.hasChart !== false ? turn.chart : null,
     savedMenu: turn.savedMenu || null,
+    targetMenu: ['schedules', 'balance', 'weather', 'exchange', 'news', 'calculator'].includes(turn.targetMenu)
+      ? turn.targetMenu
+      : null,
     awaitingConfirm: turn.awaitingConfirm === true,
     extractedSchedules: turn.extractedSchedules || [],
     extractedBalances: turn.extractedBalances || [],
@@ -563,16 +758,22 @@ async function applyIntent(uid, intent, localeLabel) {
   let chart = intent.chart && intent.chart.hasChart ? intent.chart : null;
 
   if (mode === 'auto' && menu === 'schedule') {
-    const id = await saveSchedule(uid, intent.schedule || {});
+    const draft = intent.schedule || {};
+    const id = draft.action === 'cancel'
+      ? await cancelSchedule(uid, draft.targetId)
+      : draft.action === 'reschedule'
+        ? await rescheduleSchedule(uid, draft.targetId, draft)
+        : await saveSchedule(uid, draft);
     savedMenu = id ? 'schedules' : null;
     if (!id) {
       mode = 'none';
     }
   }
   if (mode === 'auto' && menu === 'balance') {
-    const id = await saveBalance(uid, intent.balance || {});
-    savedMenu = id ? 'balance' : null;
-    if (!id) {
+    const changes = Array.isArray(intent.balances) ? intent.balances : intent.balance ? [intent.balance] : [];
+    const applied = await applyBalanceChanges(uid, changes);
+    savedMenu = applied > 0 ? 'balance' : null;
+    if (applied === 0) {
       mode = 'none';
     }
   }
@@ -625,6 +826,7 @@ async function applyIntent(uid, intent, localeLabel) {
     table: intent.table || null,
     chart,
     savedMenu,
+    targetMenu: menu === 'general' ? null : menu === 'schedule' ? 'schedules' : menu,
     awaitingConfirm,
     extractedSchedules: awaitingConfirm ? extractedSchedules : [],
     extractedBalances: awaitingConfirm ? extractedBalances : [],
@@ -707,7 +909,7 @@ exports.getNews = onCall({ region, invoker: 'public' }, async (request) => {
 exports.deleteByIds = onCall({ region }, async (request) => {
   const uid = requireUid(request);
   const collection = String(request.data.collection || '');
-  const allowed = ['schedules', 'balance_entries', 'news_items'];
+  const allowed = ['schedules', 'balance_entries', 'news_items', 'weather_logs', 'exchange_logs', 'turns'];
   if (!allowed.includes(collection)) {
     throw new HttpsError('invalid-argument', 'bad-collection');
   }
@@ -736,6 +938,39 @@ exports.deleteByIds = onCall({ region }, async (request) => {
   return { deleted: ids.length };
 });
 
+/** Hides the prompt or the answer of chat turns; a turn with both halves gone is deleted. */
+exports.hideTurnParts = onCall({ region }, async (request) => {
+  const uid = requireUid(request);
+  const parts = Array.isArray(request.data.parts) ? request.data.parts.slice(0, 400) : [];
+  const wanted = parts
+    .map((part) => ({ id: String(part?.id || ''), user: part?.user === true, ai: part?.ai === true }))
+    .filter((part) => part.id && !part.id.includes('/') && (part.user || part.ai));
+  if (wanted.length === 0) {
+    throw new HttpsError('invalid-argument', 'bad-parts');
+  }
+  const refs = wanted.map((part) => userCol(uid, 'turns').doc(part.id));
+  const snaps = await db().getAll(...refs);
+  const batch = db().batch();
+  let deleted = 0;
+  snaps.forEach((snap, index) => {
+    if (!snap.exists) {
+      return;
+    }
+    const part = wanted[index];
+    const userHidden = part.user || snap.get('userHidden') === true;
+    const aiHidden = part.ai || snap.get('aiHidden') === true;
+    if (userHidden && aiHidden) {
+      batch.delete(snap.ref);
+      deleted += 1;
+    } else {
+      batch.update(snap.ref, { userHidden, aiHidden });
+    }
+  });
+  await batch.commit();
+  await audit(uid, 'hide-turn-parts', wanted[0].id, ['userHidden', 'aiHidden']);
+  return { updated: wanted.length - deleted, deleted };
+});
+
 exports.appendTurn = onCall({ region }, async (request) => {
   const uid = requireUid(request);
   const turn = request.data.turn || {};
@@ -758,7 +993,8 @@ exports.submitPrompt = onCall({ region, secrets: [openWeatherKey, exchangeKey, g
       documentText = await extractText(fileName, uploaded.buffer);
       extracted = true;
     }
-    const intent = await askGemini(locale, filePath ? 'file' : 'text', text, documentText);
+    const [schedules, ledger] = await Promise.all([scheduleContext(uid), balanceContext(uid)]);
+    const intent = await askGemini(locale, filePath ? 'file' : 'text', text, documentText, schedules, ledger);
     if (filePath && ((intent.extractedSchedules || []).length || (intent.extractedBalances || []).length)) {
       intent.saveMode = 'confirm';
     }
@@ -843,6 +1079,7 @@ exports.scriptNews = onCall({ region, secrets: [geminiApiKey], timeoutSeconds: 1
     userText: news.title,
     aiText: scriptKo,
     savedMenu: null,
+    targetMenu: 'news',
   });
   return { scriptKo, turn };
 });
@@ -859,6 +1096,105 @@ exports.withdraw = onCall({ region, timeoutSeconds: 120 }, async (request) => {
   const [files] = await getStorage().bucket().getFiles({ prefix: `uploads/${uid}/` });
   await Promise.all(files.map((file) => file.delete({ ignoreNotFound: true })));
   await db().collection('users').doc(uid).delete().catch(() => undefined);
+  await backupDb().recursiveDelete(backupDb().collection('users').doc(uid)).catch(() => undefined);
   await getAuth().deleteUser(uid);
   return { ok: true };
+});
+
+exports.mirrorToBackup = onDocumentWritten(
+  { region, database: databaseId, document: 'users/{uid}/{collection}/{docId}' },
+  async (event) => {
+    const { uid, collection, docId } = event.params;
+    if (!mirroredCollections.includes(collection)) {
+      return;
+    }
+    const target = backupCol(uid, collection).doc(docId);
+    const after = event.data && event.data.after;
+    const eventMs = Date.parse(event.time);
+    await backupDb().runTransaction(async (tx) => {
+      const current = await tx.get(target);
+      const seenMs = current.exists ? Date.parse(current.get('mirrorEventTime') || '') : NaN;
+      if (!Number.isNaN(seenMs) && seenMs > eventMs) {
+        return;
+      }
+      if (!after || !after.exists) {
+        tx.delete(target);
+        return;
+      }
+      tx.set(target, { ...after.data(), mirrorEventTime: event.time, mirroredAt: Timestamp.now() });
+    });
+  },
+);
+
+exports.readBackup = onCall({ region }, async (request) => {
+  const uid = requireUid(request);
+  const collection = String(request.data.collection || '');
+  if (!mirroredCollections.includes(collection)) {
+    throw new HttpsError('invalid-argument', 'bad-collection');
+  }
+  const snap = await backupCol(uid, collection).limit(500).get();
+  const now = Date.now();
+  const items = snap.docs
+    .map((doc) => ({ ...plain(doc.data()), id: doc.id }))
+    .filter((item) => !item.expireAt || Date.parse(item.expireAt) > now);
+  return { items };
+});
+
+async function describeStore(database, uid) {
+  try {
+    const user = database.collection('users').doc(uid);
+    const counts = await Promise.all(
+      mirroredCollections.map((name) => user.collection(name).count().get()),
+    );
+    const total = counts.reduce((sum, agg) => sum + agg.data().count, 0);
+    let lastMirroredAt = null;
+    if (total > 0) {
+      const latest = await Promise.all(
+        mirroredCollections.map((name) => user.collection(name).orderBy('mirroredAt', 'desc').limit(1).get()),
+      );
+      for (const snap of latest) {
+        const at = snap.empty ? null : snap.docs[0].get('mirroredAt');
+        if (at && (!lastMirroredAt || at.toMillis() > lastMirroredAt.toMillis())) {
+          lastMirroredAt = at;
+        }
+      }
+    }
+    return { ok: true, total, lastMirroredAt: lastMirroredAt ? lastMirroredAt.toDate().toISOString() : null };
+  } catch (error) {
+    console.warn('describeStore failed', error.message);
+    return { ok: false, total: 0, lastMirroredAt: null };
+  }
+}
+
+exports.dbStatus = onCall({ region }, async (request) => {
+  const uid = requireUid(request);
+  const [primary, backup] = await Promise.all([describeStore(db(), uid), describeStore(backupDb(), uid)]);
+  return { primary, backup };
+});
+
+exports.syncBackup = onCall({ region, timeoutSeconds: 300 }, async (request) => {
+  const uid = requireUid(request);
+  const stamp = Timestamp.now();
+  let copied = 0;
+  for (const name of mirroredCollections) {
+    const [source, mirror] = await Promise.all([userCol(uid, name).get(), backupCol(uid, name).get()]);
+    const live = new Set(source.docs.map((doc) => doc.id));
+    const writer = backupDb().bulkWriter();
+    for (const doc of source.docs) {
+      writer.set(backupCol(uid, name).doc(doc.id), {
+        ...doc.data(),
+        mirrorEventTime: stamp.toDate().toISOString(),
+        mirroredAt: stamp,
+      });
+      copied += 1;
+    }
+    for (const doc of mirror.docs) {
+      if (!live.has(doc.id)) {
+        writer.delete(doc.ref);
+      }
+    }
+    await writer.close();
+  }
+  await audit(uid, 'sync-backup', uid, mirroredCollections);
+  return { copied };
 });

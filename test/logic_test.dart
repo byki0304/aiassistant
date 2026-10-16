@@ -1,7 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:ai_assistant/features/balance/balance_screen.dart';
 import 'package:ai_assistant/features/calculator/calc_engine.dart';
 import 'package:ai_assistant/shared/logic/domain.dart';
+import 'package:ai_assistant/shared/api/assistant_api.dart';
+import 'package:ai_assistant/shared/phone_login.dart';
+import 'package:ai_assistant/shared/state/providers.dart';
 
 void main() {
   test('week starts Monday 00:00 Asia/Seoul', () {
@@ -47,11 +51,7 @@ void main() {
     });
     expect(parsed.targetMenu, 'balance');
     expect(parsed.balance?.amount, 12000);
-    final general = parseIntent({
-      'targetMenu': 'general',
-      'saveMode': 'auto',
-      'summaryText': 'hello',
-    });
+    final general = parseIntent({'targetMenu': 'general', 'saveMode': 'auto', 'summaryText': 'hello'});
     expect(general.saveMode, 'none');
     expect(() => parseIntent('nope'), throwsFormatException);
   });
@@ -65,5 +65,51 @@ void main() {
     expect(calc.display, 'Error');
     expect(calc.hasError, isTrue);
     expect(calc.numericValue, isNull);
+  });
+
+  test('deleting one half hides it, deleting the other half removes the turn', () {
+    const turn = ChatTurn(id: 't', userText: 'q', aiText: 'a');
+    expect(hideTurnParts(turn, null), same(turn));
+    final noPrompt = hideTurnParts(turn, (user: true, ai: false))!;
+    expect(noPrompt.userHidden, isTrue);
+    expect(noPrompt.aiHidden, isFalse);
+    expect(hideTurnParts(noPrompt, (user: false, ai: true)), isNull);
+    expect(hideTurnParts(turn, (user: true, ai: true)), isNull);
+  });
+
+  test('equals records the finished calculation once', () {
+    final calc = CalcEngine();
+    calc.inputDigit('1');
+    calc.inputDigit('2');
+    calc.inputOperator('×');
+    calc.inputDigit('3');
+    calc.equals();
+    expect(calc.lastRecord, '12 × 3 = 36');
+    expect(calc.duplicate().lastRecord, isNull);
+  });
+
+  test('current balance counts every entry up to now and none after', () {
+    final now = DateTime.utc(2026, 10, 16, 12);
+    BalanceItem entry(int days, int amount, bool isIncome) => BalanceItem(
+      id: '$days',
+      description: 'x',
+      amount: amount,
+      isIncome: isIncome,
+      occurredAt: now.add(Duration(days: days)),
+      runningBalance: 0,
+    );
+    expect(balanceAt([entry(-400, 100000, true), entry(-3, 25000, false), entry(0, 5000, false), entry(2, 9999, true)], now), 70000);
+  });
+
+  test('phone login maps numbers to one account per E.164 number', () {
+    expect(toE164('+82', '10-1234-5678'), '+821012345678');
+    expect(toE164('82', '01012345678'), '+821012345678');
+    expect(toE164('+81', '90 1234 5678'), '+819012345678');
+    expect(toE164('+65', '8123 4567'), '+6581234567');
+    expect(toE164('', '1012345678'), isNull);
+    expect(toE164('+82', '12'), isNull);
+    final email = phoneLoginEmail('+821012345678');
+    expect(phoneOfLoginEmail(email), '+821012345678');
+    expect(phoneOfLoginEmail('someone@example.com'), isNull);
   });
 }

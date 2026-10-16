@@ -1,24 +1,18 @@
-import 'dart:typed_data';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart';
 
 import '../logic/domain.dart';
 
 class AssistantApi {
-  AssistantApi({
-    FirebaseFunctions? functions,
-    FirebaseFirestore? firestore,
-    FirebaseStorage? storage,
-    FirebaseAuth? auth,
-  })  : _functions = functions ?? FirebaseFunctions.instanceFor(region: 'asia-northeast3'),
-        _firestore = firestore ??
-            FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'aiassistant'),
-        _storage = storage ?? FirebaseStorage.instance,
-        _auth = auth ?? FirebaseAuth.instance;
+  AssistantApi({FirebaseFunctions? functions, FirebaseFirestore? firestore, FirebaseStorage? storage, FirebaseAuth? auth})
+    : _functions = functions ?? FirebaseFunctions.instanceFor(region: 'asia-northeast3'),
+      _firestore = firestore ?? FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'aiassistant'),
+      _storage = storage ?? FirebaseStorage.instance,
+      _auth = auth ?? FirebaseAuth.instance;
 
   final FirebaseFunctions _functions;
   final FirebaseFirestore _firestore;
@@ -35,40 +29,107 @@ class AssistantApi {
     return _firestore.collection('users').doc(current).collection(name);
   }
 
+  /// True while a list is being served from the Google Cloud backup database.
+  final ValueNotifier<bool> servingFromBackup = ValueNotifier(false);
+
+  Stream<List<T>> _primaryOrBackup<T>(
+    String collection,
+    Stream<List<T>> primary,
+    T Function(Map<String, dynamic>) fromMap,
+    int Function(T a, T b) order,
+  ) async* {
+    try {
+      await for (final items in primary) {
+        yield items;
+      }
+    } catch (error, stack) {
+      final List<Map<String, dynamic>> raw;
+      try {
+        raw = await readBackup(collection);
+      } catch (_) {
+        Error.throwWithStackTrace(error, stack);
+      }
+      servingFromBackup.value = true;
+      yield raw.map(fromMap).toList()..sort(order);
+    }
+  }
+
   Stream<List<ScheduleItem>> watchSchedules() {
-    return _col('schedules').orderBy('startAt').snapshots().map(
-          (snap) => snap.docs.map(ScheduleItem.fromDoc).toList(),
-        );
+    return _primaryOrBackup(
+      'schedules',
+      _col('schedules').orderBy('startAt').snapshots().map((snap) => snap.docs.map(ScheduleItem.fromDoc).toList()),
+      ScheduleItem.fromMap,
+      (a, b) => a.startAt.compareTo(b.startAt),
+    );
   }
 
   Stream<List<BalanceItem>> watchBalances() {
-    return _col('balance_entries').orderBy('occurredAt').snapshots().map(
-          (snap) => snap.docs.map(BalanceItem.fromDoc).toList(),
-        );
+    return _primaryOrBackup(
+      'balance_entries',
+      _col('balance_entries').orderBy('occurredAt').snapshots().map((snap) => snap.docs.map(BalanceItem.fromDoc).toList()),
+      BalanceItem.fromMap,
+      (a, b) => a.occurredAt.compareTo(b.occurredAt),
+    );
   }
 
   Stream<List<NewsItem>> watchNews() {
-    return _col('news_items').orderBy('publishedAt', descending: true).snapshots().map(
-          (snap) => snap.docs.map(NewsItem.fromDoc).toList(),
-        );
+    return _primaryOrBackup(
+      'news_items',
+      _col('news_items').orderBy('publishedAt', descending: true).snapshots().map((snap) => snap.docs.map(NewsItem.fromDoc).toList()),
+      NewsItem.fromMap,
+      (a, b) => b.publishedAt.compareTo(a.publishedAt),
+    );
   }
 
   Stream<List<WeatherItem>> watchWeather() {
-    return _col('weather_logs').orderBy('searchedAt', descending: true).snapshots().map(
-          (snap) => snap.docs.map(WeatherItem.fromDoc).where((item) => item.isLive).toList(),
-        );
+    return _primaryOrBackup(
+      'weather_logs',
+      _col('weather_logs')
+          .orderBy('searchedAt', descending: true)
+          .snapshots()
+          .map((snap) => snap.docs.map(WeatherItem.fromDoc).where((item) => item.isLive).toList()),
+      WeatherItem.fromMap,
+      (a, b) => b.searchedAt.compareTo(a.searchedAt),
+    );
   }
 
   Stream<List<ExchangeItem>> watchExchange() {
-    return _col('exchange_logs').orderBy('searchedAt', descending: true).snapshots().map(
-          (snap) => snap.docs.map(ExchangeItem.fromDoc).where((item) => item.isLive).toList(),
-        );
+    return _primaryOrBackup(
+      'exchange_logs',
+      _col('exchange_logs')
+          .orderBy('searchedAt', descending: true)
+          .snapshots()
+          .map((snap) => snap.docs.map(ExchangeItem.fromDoc).where((item) => item.isLive).toList()),
+      ExchangeItem.fromMap,
+      (a, b) => b.searchedAt.compareTo(a.searchedAt),
+    );
   }
 
   Stream<List<ChatTurn>> watchTurns() {
-    return _col('turns').orderBy('createdAt').snapshots().map(
-          (snap) => snap.docs.map(ChatTurn.fromDoc).toList(),
-        );
+    return _primaryOrBackup(
+      'turns',
+      _col('turns').orderBy('createdAt').snapshots().map((snap) => snap.docs.map(ChatTurn.fromDoc).toList()),
+      ChatTurn.fromMap,
+      (a, b) => (a.createdAt ?? DateTime(0)).compareTo(b.createdAt ?? DateTime(0)),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> readBackup(String collection) async {
+    final data = await _call('readBackup', {'collection': collection});
+    final raw = data['items'];
+    if (raw is! List) {
+      return const [];
+    }
+    return raw.whereType<Map>().map((item) => Map<String, dynamic>.from(item)).toList();
+  }
+
+  Future<DbStatus> dbStatus() async {
+    return DbStatus.fromMap(await _call('dbStatus', {}));
+  }
+
+  Future<int> syncBackup() async {
+    final data = await _call('syncBackup', {});
+    return (data['copied'] as num?)?.toInt() ?? 0;
   }
 
   Future<Map<String, dynamic>> _call(String name, Map<String, dynamic> data) async {
@@ -80,25 +141,13 @@ class AssistantApi {
     return {'ok': true};
   }
 
-  Future<WeatherItem> getWeather({
-    required String cityName,
-    required String cityQuery,
-  }) async {
-    final data = await _call('getWeather', {
-      'cityName': cityName,
-      'cityQuery': cityQuery,
-    });
+  Future<WeatherItem> getWeather({required String cityName, required String cityQuery}) async {
+    final data = await _call('getWeather', {'cityName': cityName, 'cityQuery': cityQuery});
     return WeatherItem.fromMap(data);
   }
 
-  Future<ExchangeItem> getExchange({
-    required String currencyCode,
-    required String currencyLabel,
-  }) async {
-    final data = await _call('getExchange', {
-      'currencyCode': currencyCode,
-      'currencyLabel': currencyLabel,
-    });
+  Future<ExchangeItem> getExchange({required String currencyCode, required String currencyLabel}) async {
+    final data = await _call('getExchange', {'currencyCode': currencyCode, 'currencyLabel': currencyLabel});
     return ExchangeItem.fromMap(data);
   }
 
@@ -108,10 +157,7 @@ class AssistantApi {
     if (raw is! List) {
       return const [];
     }
-    return raw
-        .whereType<Map>()
-        .map((item) => NewsItem.fromMap(Map<String, dynamic>.from(item)))
-        .toList();
+    return raw.whereType<Map>().map((item) => NewsItem.fromMap(Map<String, dynamic>.from(item))).toList();
   }
 
   Future<ChatTurn> submitPrompt({
@@ -131,10 +177,7 @@ class AssistantApi {
     return ChatTurn.fromMap(Map<String, dynamic>.from(data['turn'] as Map));
   }
 
-  Future<ChatTurn> confirmExtracted({
-    required String turnId,
-    required String kind,
-  }) async {
+  Future<ChatTurn> confirmExtracted({required String turnId, required String kind}) async {
     final data = await _call('confirmExtracted', {'turnId': turnId, 'kind': kind});
     return ChatTurn.fromMap(Map<String, dynamic>.from(data['turn'] as Map));
   }
@@ -143,26 +186,37 @@ class AssistantApi {
     return _call('deleteByIds', {'collection': collection, 'ids': ids});
   }
 
+  /// Removes the chosen halves of chat turns; whole turns go through [deleteByIds].
+  Future<void> deleteTurnParts(Map<String, ({bool user, bool ai})> parts) async {
+    final whole = [
+      for (final entry in parts.entries)
+        if (entry.value.user && entry.value.ai) entry.key,
+    ];
+    final partial = [
+      for (final entry in parts.entries)
+        if (!(entry.value.user && entry.value.ai)) {'id': entry.key, 'user': entry.value.user, 'ai': entry.value.ai},
+    ];
+    if (whole.isNotEmpty) {
+      await deleteByIds('turns', whole);
+    }
+    if (partial.isNotEmpty) {
+      await _call('hideTurnParts', {'parts': partial});
+    }
+  }
+
   Future<ChatTurn> appendTurn(ChatTurn turn) async {
     final data = await _call('appendTurn', {'turn': turn.toJson()});
     return ChatTurn.fromMap(Map<String, dynamic>.from(data['turn'] as Map));
   }
 
-  Future<String> scriptNews({
-    required String newsId,
-    required String locale,
-  }) async {
+  Future<String> scriptNews({required String newsId, required String locale}) async {
     final data = await _call('scriptNews', {'newsId': newsId, 'locale': locale});
     return '${data['scriptKo'] ?? data['scriptText'] ?? ''}';
   }
 
   Future<void> withdraw() => _call('withdraw', {});
 
-  Future<String> upload({
-    required String fileName,
-    required List<int> bytes,
-    required String contentType,
-  }) async {
+  Future<String> upload({required String fileName, required List<int> bytes, required String contentType}) async {
     final current = uid;
     if (current == null) {
       throw StateError('unauthenticated');
@@ -181,6 +235,7 @@ class ScheduleItem {
     required this.startAt,
     required this.endAt,
     required this.allDay,
+    this.cancelled = false,
   });
 
   final String id;
@@ -188,15 +243,20 @@ class ScheduleItem {
   final DateTime startAt;
   final DateTime endAt;
   final bool allDay;
+  final bool cancelled;
 
   static ScheduleItem fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data() ?? {};
+    return ScheduleItem.fromMap({...doc.data() ?? {}, 'id': doc.id});
+  }
+
+  static ScheduleItem fromMap(Map<String, dynamic> data) {
     return ScheduleItem(
-      id: doc.id,
+      id: '${data['id'] ?? ''}',
       title: '${data['title'] ?? ''}',
       startAt: readTime(data['startAt']),
       endAt: readTime(data['endAt']),
       allDay: data['allDay'] == true,
+      cancelled: data['cancelled'] == true,
     );
   }
 }
@@ -219,9 +279,12 @@ class BalanceItem {
   final int runningBalance;
 
   static BalanceItem fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data() ?? {};
+    return BalanceItem.fromMap({...doc.data() ?? {}, 'id': doc.id});
+  }
+
+  static BalanceItem fromMap(Map<String, dynamic> data) {
     return BalanceItem(
-      id: doc.id,
+      id: '${data['id'] ?? ''}',
       description: '${data['description'] ?? ''}',
       amount: (data['amount'] as num?)?.round() ?? 0,
       isIncome: data['isIncome'] == true,
@@ -356,6 +419,7 @@ class ChatTurn {
     this.table,
     this.chart,
     this.savedMenu,
+    this.targetMenu,
     this.awaitingConfirm = false,
     this.extractedSchedules = const [],
     this.extractedBalances = const [],
@@ -363,6 +427,8 @@ class ChatTurn {
     this.pending = false,
     this.failed = false,
     this.localOnly = false,
+    this.userHidden = false,
+    this.aiHidden = false,
   });
 
   final String id;
@@ -373,6 +439,7 @@ class ChatTurn {
   final TableModel? table;
   final ChartModel? chart;
   final String? savedMenu;
+  final String? targetMenu;
   final bool awaitingConfirm;
   final List<ScheduleDraft> extractedSchedules;
   final List<BalanceDraft> extractedBalances;
@@ -380,6 +447,11 @@ class ChatTurn {
   final bool pending;
   final bool failed;
   final bool localOnly;
+  final bool userHidden;
+  final bool aiHidden;
+
+  /// The menu this answer belongs to, whether or not anything was saved there.
+  String? get menuId => savedMenu ?? targetMenu;
 
   ChatTurn copyWith({
     String? id,
@@ -387,6 +459,8 @@ class ChatTurn {
     bool? pending,
     bool? failed,
     bool? localOnly,
+    bool? userHidden,
+    bool? aiHidden,
     String? savedMenu,
     bool? awaitingConfirm,
     TableModel? table,
@@ -401,6 +475,7 @@ class ChatTurn {
       table: table ?? this.table,
       chart: chart ?? this.chart,
       savedMenu: savedMenu ?? this.savedMenu,
+      targetMenu: targetMenu,
       awaitingConfirm: awaitingConfirm ?? this.awaitingConfirm,
       extractedSchedules: extractedSchedules,
       extractedBalances: extractedBalances,
@@ -408,18 +483,21 @@ class ChatTurn {
       pending: pending ?? this.pending,
       failed: failed ?? this.failed,
       localOnly: localOnly ?? this.localOnly,
+      userHidden: userHidden ?? this.userHidden,
+      aiHidden: aiHidden ?? this.aiHidden,
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'userText': userText,
-        'aiText': aiText,
-        'isVoice': isVoice,
-        'fileName': fileName,
-        'table': table?.toJson(),
-        'chart': chart?.toJson(),
-        'savedMenu': savedMenu,
-      };
+    'userText': userText,
+    'aiText': aiText,
+    'isVoice': isVoice,
+    'fileName': fileName,
+    'table': table?.toJson(),
+    'chart': chart?.toJson(),
+    'savedMenu': savedMenu,
+    'targetMenu': targetMenu,
+  };
 
   static ChatTurn fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     return ChatTurn.fromMap({...doc.data() ?? {}, 'id': doc.id});
@@ -435,21 +513,48 @@ class ChatTurn {
       table: TableModel.fromJson(data['table']),
       chart: ChartModel.fromJson(data['chart']),
       savedMenu: data['savedMenu'] as String?,
+      targetMenu: data['targetMenu'] as String?,
       awaitingConfirm: data['awaitingConfirm'] == true,
       extractedSchedules: data['extractedSchedules'] is List
-          ? (data['extractedSchedules'] as List)
-              .map(ScheduleDraft.fromJson)
-              .whereType<ScheduleDraft>()
-              .toList()
+          ? (data['extractedSchedules'] as List).map(ScheduleDraft.fromJson).whereType<ScheduleDraft>().toList()
           : const [],
       extractedBalances: data['extractedBalances'] is List
-          ? (data['extractedBalances'] as List)
-              .map(BalanceDraft.fromJson)
-              .whereType<BalanceDraft>()
-              .toList()
+          ? (data['extractedBalances'] as List).map(BalanceDraft.fromJson).whereType<BalanceDraft>().toList()
           : const [],
       createdAt: data['createdAt'] == null ? null : readTime(data['createdAt']),
+      userHidden: data['userHidden'] == true,
+      aiHidden: data['aiHidden'] == true,
     );
+  }
+}
+
+class DbSide {
+  const DbSide({required this.ok, required this.total, this.lastMirroredAt});
+
+  final bool ok;
+  final int total;
+  final DateTime? lastMirroredAt;
+
+  static DbSide fromMap(Object? raw) {
+    if (raw is! Map) {
+      return const DbSide(ok: false, total: 0);
+    }
+    return DbSide(
+      ok: raw['ok'] == true,
+      total: (raw['total'] as num?)?.toInt() ?? 0,
+      lastMirroredAt: raw['lastMirroredAt'] == null ? null : readTime(raw['lastMirroredAt']),
+    );
+  }
+}
+
+class DbStatus {
+  const DbStatus({required this.primary, required this.backup});
+
+  final DbSide primary;
+  final DbSide backup;
+
+  static DbStatus fromMap(Map<String, dynamic> data) {
+    return DbStatus(primary: DbSide.fromMap(data['primary']), backup: DbSide.fromMap(data['backup']));
   }
 }
 
