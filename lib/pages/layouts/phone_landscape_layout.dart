@@ -9,7 +9,7 @@ import '../../shared/theme/toon_widgets.dart';
 import '../../shared/widgets/language_picker.dart';
 import '../app_shell.dart';
 
-/// Phone held sideways: a slim sticker rail on the left, a thin strip with log out at the top right,
+/// Phone held sideways: a slim sticker rail on the left, a thin strip with language, my page, and log out at the top right,
 /// and the conversation alone until a menu opens beside it.
 class PhoneLandscapeLayout extends ConsumerWidget {
   const PhoneLandscapeLayout({super.key});
@@ -69,7 +69,6 @@ class PhoneLandscapeLayout extends ConsumerWidget {
                     ),
                   ),
                 ),
-                const AccountButton(size: 36),
               ],
             ),
           ),
@@ -80,7 +79,17 @@ class PhoneLandscapeLayout extends ConsumerWidget {
               children: [
                 const Padding(
                   padding: EdgeInsets.fromLTRB(6, 0, 0, 6),
-                  child: Row(children: [Wordmark(size: 16), Spacer(), LanguageButton(), SizedBox(width: 8), LogoutButton()]),
+                  child: Row(
+                    children: [
+                      Wordmark(size: 16),
+                      Spacer(),
+                      LanguageButton(),
+                      SizedBox(width: 8),
+                      AccountButton(size: 34),
+                      SizedBox(width: 8),
+                      LogoutButton(),
+                    ],
+                  ),
                 ),
                 Expanded(
                   child: Row(

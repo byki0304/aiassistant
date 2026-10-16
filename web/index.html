@@ -41,6 +41,20 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
+  <script>
+    // Browsers that ran an earlier build keep its service worker and cached app files; drop both and reload once.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (registrations) {
+        if (registrations.length === 0) {
+          return;
+        }
+        Promise.all(registrations.map(function (registration) { return registration.unregister(); }))
+          .then(function () { return window.caches ? caches.keys() : []; })
+          .then(function (keys) { return Promise.all(keys.map(function (key) { return caches.delete(key); })); })
+          .then(function () { window.location.reload(); });
+      });
+    }
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
