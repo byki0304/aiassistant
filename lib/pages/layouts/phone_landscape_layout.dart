@@ -6,6 +6,7 @@ import '../../shared/app_text.dart';
 import '../../shared/state/providers.dart';
 import '../../shared/theme/toon.dart';
 import '../../shared/theme/toon_widgets.dart';
+import '../../shared/widgets/language_picker.dart';
 import '../app_shell.dart';
 
 /// Phone held sideways: a slim sticker rail on the left, a thin strip with log out at the top right,
@@ -79,7 +80,7 @@ class PhoneLandscapeLayout extends ConsumerWidget {
               children: [
                 const Padding(
                   padding: EdgeInsets.fromLTRB(6, 0, 0, 6),
-                  child: Row(children: [Wordmark(size: 16), Spacer(), LogoutButton()]),
+                  child: Row(children: [Wordmark(size: 16), Spacer(), LanguageButton(), SizedBox(width: 8), LogoutButton()]),
                 ),
                 Expanded(
                   child: Row(

@@ -6,6 +6,7 @@ import '../../shared/app_text.dart';
 import '../../shared/state/providers.dart';
 import '../../shared/theme/toon.dart';
 import '../../shared/theme/toon_widgets.dart';
+import '../../shared/widgets/language_picker.dart';
 import '../app_shell.dart';
 
 /// Desktop and tablet landscape: one big board with the menu sticker bar on top.
@@ -79,6 +80,8 @@ class DesktopLayout extends ConsumerWidget {
                             ),
                           ),
                         const SizedBox(width: 12),
+                        const LanguageButton(),
+                        const SizedBox(width: 10),
                         AccountButton(size: wide ? 54 : 46),
                       ],
                     ),

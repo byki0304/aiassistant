@@ -6,6 +6,7 @@ import '../../shared/app_text.dart';
 import '../../shared/state/providers.dart';
 import '../../shared/theme/toon.dart';
 import '../../shared/theme/toon_widgets.dart';
+import '../../shared/widgets/language_picker.dart';
 import '../app_shell.dart';
 
 /// Phone held upright: header, chat on top, menu below, sticker tab bar at the thumb.
@@ -34,6 +35,8 @@ class PortraitLayout extends ConsumerWidget {
                 child: Pressable(label: text.homeChat, onTap: () => goHome(ref), child: const Wordmark(size: 19)),
               ),
               const Spacer(),
+              LanguageButton(showGlyph: !narrow),
+              const SizedBox(width: 8),
               const AccountButton(size: 36),
               const SizedBox(width: 8),
               LogoutButton(iconOnly: narrow),

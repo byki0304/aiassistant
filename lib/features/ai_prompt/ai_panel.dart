@@ -1,4 +1,5 @@
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,6 +31,7 @@ class _ChatPaneState extends ConsumerState<ChatPane> {
   final _speech = SpeechToText();
   PlatformFile? _file;
   bool _listening = false;
+  bool _spoken = false;
   bool _deleting = false;
 
   /// Checked bubbles, keyed by [_promptKey] and [_answerKey].
@@ -93,29 +95,21 @@ class _ChatPaneState extends ConsumerState<ChatPane> {
           padding: EdgeInsets.fromLTRB(gap, gap, gap, 0),
           child: compact ? _compactInput(text, locale) : _fullInput(text, locale, selection),
         ),
-        SizedBox(
-          height: 52,
-          child: Row(
-            children: [
-              Expanded(
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: EdgeInsets.fromLTRB(gap, 6, gap, 4),
-                  children: [
-                    _preset(text.presetBalance, ToonGlyph.wallet, Toon.butter, () => _presetBalance(text, locale)),
-                    _preset(text.presetNews, ToonGlyph.news, Toon.lilac, () => _presetNews(text, locale)),
-                    _preset(text.presetWeather, ToonGlyph.weather, Toon.sky, () => _presetWeather(text, locale)),
-                  ],
-                ),
-              ),
-              if (compact && selection != null)
-                Padding(
-                  padding: EdgeInsets.only(right: gap),
-                  child: selection,
-                ),
-            ],
+        if (compact)
+          _compactPresets(text, locale, gap, selection)
+        else
+          SizedBox(
+            height: 52,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: EdgeInsets.fromLTRB(gap, 6, gap, 4),
+              children: [
+                _preset(text.presetBalance, ToonGlyph.wallet, Toon.butter, () => _presetBalance(text, locale)),
+                _preset(text.presetNews, ToonGlyph.news, Toon.lilac, () => _presetNews(text, locale)),
+                _preset(text.presetWeather, ToonGlyph.weather, Toon.sky, () => _presetWeather(text, locale)),
+              ],
+            ),
           ),
-        ),
         if (!compact)
           Padding(
             padding: EdgeInsets.fromLTRB(gap + 2, 6, gap, 2),
@@ -140,6 +134,38 @@ class _ChatPaneState extends ConsumerState<ChatPane> {
       padding: const EdgeInsets.only(right: 8),
       child: Center(
         child: ToonButton(label: label, glyph: glyph, color: color, compact: true, onPressed: onTap),
+      ),
+    );
+  }
+
+  /// Phones: presets and the selection toggle on two lines, scaled down together when the screen is too narrow.
+  Widget _compactPresets(AppText text, String locale, double gap, Widget? selection) {
+    Widget button(String label, ToonGlyph glyph, Color color, VoidCallback onTap) =>
+        ToonButton(label: label, glyph: glyph, color: color, compact: true, onPressed: onTap);
+    Widget fit(Widget child) => FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: child);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(gap, 6, gap, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          fit(
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                button(text.presetBalance, ToonGlyph.wallet, Toon.butter, () => _presetBalance(text, locale)),
+                const SizedBox(width: 8),
+                button(text.presetNews, ToonGlyph.news, Toon.lilac, () => _presetNews(text, locale)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(child: fit(button(text.presetWeather, ToonGlyph.weather, Toon.sky, () => _presetWeather(text, locale)))),
+              if (selection != null) ...[const SizedBox(width: 8), selection],
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -495,7 +521,7 @@ class _ChatPaneState extends ConsumerState<ChatPane> {
       _failLocal(text.emptyInput, text);
       return;
     }
-    final isVoice = _listening;
+    final isVoice = _listening || _spoken;
     if (_listening) {
       await _speech.stop();
     }
@@ -503,6 +529,7 @@ class _ChatPaneState extends ConsumerState<ChatPane> {
     setState(() {
       _file = null;
       _listening = false;
+      _spoken = false;
     });
     await _run(
       userText: value.isEmpty ? file!.name : value,
@@ -697,20 +724,36 @@ class _ChatPaneState extends ConsumerState<ChatPane> {
       setState(() => _listening = false);
       return;
     }
-    final ready = await _speech.initialize();
+    final ready = await _speech.initialize(
+      onStatus: (status) {
+        if ((status == 'done' || status == 'notListening') && mounted && _listening) {
+          setState(() => _listening = false);
+        }
+      },
+      onError: (_) {
+        if (mounted) {
+          setState(() => _listening = false);
+        }
+      },
+    );
     if (!ready) {
       return;
     }
+    final region = switch (locale) {
+      'en' => 'en_US',
+      'ja' => 'ja_JP',
+      _ => 'ko_KR',
+    };
+    // Android Chrome repeats earlier words in every continuous result, so it gets one final utterance instead.
+    final androidWeb = kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     setState(() => _listening = true);
     await _speech.listen(
-      onResult: (result) => _input.text = result.recognizedWords,
-      listenOptions: SpeechListenOptions(
-        localeId: switch (locale) {
-          'en' => 'en_US',
-          'ja' => 'ja_JP',
-          _ => 'ko_KR',
-        },
-      ),
+      onResult: (result) {
+        _spoken = result.recognizedWords.isNotEmpty;
+        _input.text = result.recognizedWords;
+        _input.selection = TextSelection.collapsed(offset: _input.text.length);
+      },
+      listenOptions: SpeechListenOptions(localeId: kIsWeb ? region.replaceAll('_', '-') : region, partialResults: !androidWeb),
     );
   }
 }
