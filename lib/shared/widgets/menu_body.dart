@@ -4,14 +4,26 @@ import '../app_text.dart';
 import '../errors.dart';
 import '../theme/toon_widgets.dart';
 
-/// Menu content: tools beside the records when the pane is wide, stacked when narrow.
+/// Menu content: tools beside the records when the pane is wide, stacked when narrow,
+/// and one scrolling column when the pane is too short to give the records their own room.
 class MenuBody extends StatelessWidget {
-  const MenuBody({super.key, required this.tools, required this.records, this.splitAt = 600, this.toolsShare = 0.42, this.sidePose});
+  const MenuBody({
+    super.key,
+    required this.tools,
+    required this.records,
+    this.splitAt = 600,
+    this.toolsShare = 0.42,
+    this.scrollBelow = 560,
+    this.sidePose,
+  });
 
   final Widget tools;
+
+  /// Must cope with unbounded height, as [SelectableList] does.
   final Widget records;
   final double splitAt;
   final double toolsShare;
+  final double scrollBelow;
 
   /// Robot sticker shown under the tools only when there is room beside the records.
   final RobotPose? sidePose;
@@ -47,6 +59,9 @@ class MenuBody extends StatelessWidget {
               ],
             ),
           );
+        }
+        if (constraints.maxHeight < scrollBelow) {
+          return ListView(padding: const EdgeInsets.fromLTRB(10, 10, 10, 8), children: [tools, const SizedBox(height: 10), records]);
         }
         return Padding(
           padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),

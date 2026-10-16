@@ -250,7 +250,7 @@ class CalculatorWidget extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 14),
-            SizedBox(height: 320, child: history),
+            history,
           ],
         );
       },

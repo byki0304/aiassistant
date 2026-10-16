@@ -113,10 +113,25 @@ class _SelectableListState extends State<SelectableList> {
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) => _content(fill: constraints.maxHeight.isFinite));
+  }
+
+  /// [fill] takes the given height and scrolls inside it; otherwise every row is laid out for an outer scroll view.
+  Widget _content({required bool fill}) {
     final rows = widget.rows;
     final size = widget.pageSize;
     final visible = size == null ? rows : rows.skip(_page * size).take(size).toList();
+    final body = rows.isEmpty
+        ? ToonEmpty(widget.emptyText, pose: widget.emptyPose, compact: true)
+        : ListView.builder(
+            shrinkWrap: !fill,
+            physics: fill ? null : const NeverScrollableScrollPhysics(),
+            padding: const EdgeInsets.only(bottom: 8),
+            itemCount: visible.length,
+            itemBuilder: (context, index) => _row(visible, index),
+          );
     return Column(
+      mainAxisSize: fill ? MainAxisSize.max : MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
@@ -143,53 +158,45 @@ class _SelectableListState extends State<SelectableList> {
                   ),
           ),
         ),
-        Expanded(
-          child: rows.isEmpty
-              ? ToonEmpty(widget.emptyText, pose: widget.emptyPose, compact: true)
-              : ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  itemCount: visible.length,
-                  itemBuilder: (context, index) {
-                    final row = visible[index];
-                    final checked = _selected.contains(row.id);
-                    final heading = row.group != null && (index == 0 || visible[index - 1].group != row.group) ? row.group : null;
-                    final item = Padding(
-                      padding: const EdgeInsets.only(bottom: 7),
-                      child: Semantics(
-                        container: true,
-                        checked: checked,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () => _toggle(row.id),
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 180),
-                            padding: const EdgeInsets.fromLTRB(8, 8, 10, 8),
-                            decoration: BoxDecoration(
-                              color: checked ? Toon.cream : Toon.white,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: Toon.ink, width: checked ? 2.2 : 1.6),
-                            ),
-                            child: Row(
-                              children: [
-                                ToonCheck(checked: checked),
-                                const SizedBox(width: 10),
-                                Expanded(child: row.child),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                    return heading == null
-                        ? item
-                        : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_groupHeading(heading), item]);
-                  },
-                ),
-        ),
+        if (fill) Expanded(child: body) else body,
         if (_pageCount > 1)
           PageNumbers(count: _pageCount, current: _page, onSelect: (page) => setState(() => _page = page), label: widget.pageLabel),
       ],
     );
+  }
+
+  Widget _row(List<SelectableRow> visible, int index) {
+    final row = visible[index];
+    final checked = _selected.contains(row.id);
+    final heading = row.group != null && (index == 0 || visible[index - 1].group != row.group) ? row.group : null;
+    final item = Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: Semantics(
+        container: true,
+        checked: checked,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _toggle(row.id),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.fromLTRB(8, 8, 10, 8),
+            decoration: BoxDecoration(
+              color: checked ? Toon.cream : Toon.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Toon.ink, width: checked ? 2.2 : 1.6),
+            ),
+            child: Row(
+              children: [
+                ToonCheck(checked: checked),
+                const SizedBox(width: 10),
+                Expanded(child: row.child),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return heading == null ? item : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [_groupHeading(heading), item]);
   }
 }
 

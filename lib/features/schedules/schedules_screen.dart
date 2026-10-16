@@ -118,16 +118,17 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
                   ScheduleMode.month => 400.0,
                   ScheduleMode.year => 260.0,
                   ScheduleMode.week => 170.0,
-                  ScheduleMode.day => 200.0,
+                  ScheduleMode.day => null,
                 };
+                final calendar = _calendarCard(items, text, locale);
                 return ListView(
-                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
+                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
                   children: [
                     controls,
                     const SizedBox(height: 8),
-                    SizedBox(height: calendarHeight, child: _calendarCard(items, text, locale)),
+                    if (calendarHeight == null) calendar else SizedBox(height: calendarHeight, child: calendar),
                     const SizedBox(height: 10),
-                    SizedBox(height: 430, child: list),
+                    list,
                   ],
                 );
               },
@@ -200,6 +201,7 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
         final rows = (12 / columns).ceil();
         final ratio = (constraints.maxWidth / columns) / (constraints.maxHeight / rows);
         return GridView.count(
+          physics: const NeverScrollableScrollPhysics(),
           crossAxisCount: columns,
           childAspectRatio: ratio.clamp(0.8, 4.0),
           padding: EdgeInsets.zero,
@@ -245,40 +247,49 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
   Widget _dayList(List<ScheduleItem> items, AppText text, String locale) {
     final day = _dateOnly(_focused);
     final dayItems = items.where((item) => seoulDay(item.startAt) == day).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
+    final rows = [
+      for (final item in dayItems)
         Padding(
-          padding: const EdgeInsets.all(6),
-          child: Text(
-            DateFormat.yMMMMEEEEd(locale).format(_focused),
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontWeight: FontWeight.w900),
+          padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+          child: Row(
+            children: [
+              ToonPill(DateFormat.Hm(locale).format(SeoulClock.toSeoul(item.startAt)), color: Toon.butter),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(item.title, style: const TextStyle(fontWeight: FontWeight.w800)),
+              ),
+              if (item.cancelled) _WhitePill(text.cancelledBadge, color: Toon.red),
+            ],
           ),
         ),
-        Expanded(
-          child: dayItems.isEmpty
-              ? const Center(child: RobotArt(RobotPose.head, height: 46))
-              : ListView(
-                  children: [
-                    for (final item in dayItems)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
-                        child: Row(
-                          children: [
-                            ToonPill(DateFormat.Hm(locale).format(SeoulClock.toSeoul(item.startAt)), color: Toon.butter),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(item.title, style: const TextStyle(fontWeight: FontWeight.w800)),
-                            ),
-                            if (item.cancelled) _WhitePill(text.cancelledBadge, color: Toon.red),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-        ),
-      ],
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final fill = constraints.maxHeight.isFinite;
+        final body = dayItems.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Center(child: RobotArt(RobotPose.head, height: 46)),
+              )
+            : fill
+            ? ListView(children: rows)
+            : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: rows);
+        return Column(
+          mainAxisSize: fill ? MainAxisSize.max : MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(6),
+              child: Text(
+                DateFormat.yMMMMEEEEd(locale).format(_focused),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+            if (fill) Expanded(child: body) else body,
+          ],
+        );
+      },
     );
   }
 
@@ -289,7 +300,8 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
     }
     return LayoutBuilder(
       builder: (context, constraints) {
-        const header = 44.0;
+        // 24 px chevrons with table_calendar's 12 px padding, plus the 4 px header padding above and below.
+        const header = 56.0;
         const daysOfWeek = 18.0;
         final rows = _mode == ScheduleMode.week ? 1 : 6;
         final available = constraints.maxHeight.isFinite ? constraints.maxHeight : 320.0;
@@ -331,6 +343,8 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
         }
 
         return TableCalendar<ScheduleItem>(
+          // A fresh calendar per mode: the card height changes at once, so an animated format change would overflow it.
+          key: ValueKey(_mode),
           locale: locale,
           firstDay: DateTime.utc(2020),
           lastDay: DateTime.utc(2036),
@@ -338,6 +352,8 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
           rowHeight: rowHeight,
           daysOfWeekHeight: daysOfWeek,
           calendarFormat: _mode == ScheduleMode.week ? CalendarFormat.week : CalendarFormat.month,
+          // Vertical swipes must reach the screen's scroll view; the mode buttons already switch formats.
+          availableGestures: AvailableGestures.horizontalSwipe,
           headerStyle: const HeaderStyle(
             formatButtonVisible: false,
             titleCentered: true,
