@@ -132,11 +132,11 @@ async function saveSchedule(uid, draft) {
 
 /** Moves an existing schedule to the new time; a missing end keeps the old duration. */
 async function rescheduleSchedule(uid, targetId, draft) {
-  const ref = userCol(uid, 'schedules').doc(String(targetId || 'missing'));
-  const snap = await ref.get();
-  if (!snap.exists) {
+  const snap = await findTarget(uid, 'schedules', targetId, 'title', draft?.title);
+  if (!snap) {
     return null;
   }
+  const ref = snap.ref;
   const allDay = typeof draft?.allDay === 'boolean' ? draft.allDay : snap.get('allDay') === true;
   const start = parseWhen(draft?.startAt, allDay ? 0 : 9, 0);
   if (!start) {
@@ -160,12 +160,12 @@ async function rescheduleSchedule(uid, targetId, draft) {
   return ref.id;
 }
 
-async function cancelSchedule(uid, targetId) {
-  const ref = userCol(uid, 'schedules').doc(String(targetId || 'missing'));
-  const snap = await ref.get();
-  if (!snap.exists) {
+async function cancelSchedule(uid, targetId, title) {
+  const snap = await findTarget(uid, 'schedules', targetId, 'title', title);
+  if (!snap) {
     return null;
   }
+  const ref = snap.ref;
   await ref.update({ cancelled: true, cancelledAt: Timestamp.fromDate(new Date()) });
   await audit(uid, 'cancel', ref.id, ['cancelled']);
   return ref.id;
@@ -242,13 +242,37 @@ async function saveBalance(uid, draft, { recalculate = true } = {}) {
   return ref.id;
 }
 
-/** Corrects the fields the model gave for an existing entry; the caller recalculates balances. */
-async function updateBalance(uid, targetId, draft) {
-  const ref = userCol(uid, 'balance_entries').doc(String(targetId || 'missing'));
-  const snap = await ref.get();
-  if (!snap.exists) {
+/**
+ * Finds the document the model means: its id when it exists, otherwise the only document whose `field` equals `label`.
+ */
+async function findTarget(uid, collection, targetId, field, label) {
+  const id = String(targetId || '').trim();
+  if (id && !id.includes('/')) {
+    const snap = await userCol(uid, collection).doc(id).get();
+    if (snap.exists) {
+      return snap;
+    }
+  }
+  const wanted = String(label || '').trim();
+  if (!wanted) {
+    console.warn('target not found', { collection, hasId: Boolean(id) });
     return null;
   }
+  const matches = await userCol(uid, collection).where(field, '==', wanted).limit(2).get();
+  if (matches.size !== 1) {
+    console.warn('target not found', { collection, hasId: Boolean(id), matches: matches.size });
+    return null;
+  }
+  return matches.docs[0];
+}
+
+/** Corrects the fields the model gave for an existing entry; the caller recalculates balances. */
+async function updateBalance(uid, targetId, draft) {
+  const snap = await findTarget(uid, 'balance_entries', targetId, 'description', draft?.description);
+  if (!snap) {
+    return null;
+  }
+  const ref = snap.ref;
   const changes = {};
   const description = String(draft?.description || '').trim().slice(0, 200);
   if (description) {
@@ -266,6 +290,7 @@ async function updateBalance(uid, targetId, draft) {
     changes.occurredAt = Timestamp.fromDate(occurred);
   }
   if (Object.keys(changes).length === 0) {
+    console.warn('balance update has no fields');
     return null;
   }
   await ref.update({ ...changes, updatedAt: Timestamp.fromDate(new Date()) });
@@ -273,12 +298,12 @@ async function updateBalance(uid, targetId, draft) {
   return ref.id;
 }
 
-async function deleteBalance(uid, targetId) {
-  const ref = userCol(uid, 'balance_entries').doc(String(targetId || 'missing'));
-  const snap = await ref.get();
-  if (!snap.exists) {
+async function deleteBalance(uid, targetId, description) {
+  const snap = await findTarget(uid, 'balance_entries', targetId, 'description', description);
+  if (!snap) {
     return null;
   }
+  const ref = snap.ref;
   await ref.delete();
   await audit(uid, 'delete', ref.id, ['id']);
   return ref.id;
@@ -289,7 +314,7 @@ async function applyBalanceChanges(uid, changes) {
   let applied = 0;
   for (const change of changes.slice(0, 20)) {
     const id = change?.action === 'delete'
-      ? await deleteBalance(uid, change.targetId)
+      ? await deleteBalance(uid, change.targetId, change.description)
       : change?.action === 'update'
         ? await updateBalance(uid, change.targetId, change)
         : await saveBalance(uid, change, { recalculate: false });
@@ -613,15 +638,20 @@ async function askGemini(locale, source, text, documentText, schedules, ledger) 
     `Write summaryText in locale ${locale}.`,
     `Now in Asia/Seoul: ${seoulIso(now)} (${weekday}). Resolve relative dates such as tomorrow or the day after tomorrow from this.`,
     'saveMode auto only for one clear schedule, clearly stated income or expense entries, or a weather, exchange, or news lookup.',
+    'Moving, cancelling, correcting, or removing an existing schedule or ledger entry listed below is also saveMode auto.',
     'If source is file and you find schedules or amounts, saveMode must be confirm. Do not invent weather, rates, or headlines.',
     'Schedule times use ISO-8601. A date without a time means 09:00-10:00 Asia/Seoul.',
     'For targetMenu schedule set schedule.action: create for a new event; reschedule when the user moves an existing event to another date or time;',
     'cancel when the user says an existing event is cancelled or called off. For reschedule and cancel, schedule.targetId must be the id of the',
-    'existing schedule below that the user means, and reschedule needs the new startAt (and endAt when given). Keep title short and specific.',
+    'existing schedule below that the user means. For create and reschedule always fill schedule.startAt with the full new ISO-8601 date and time',
+    '(for reschedule resolve weekdays and dates from now; keep the old time if only the date changes, keep the old date if only the time changes),',
+    'and schedule.title with the event title. Keep title short and specific.',
     'Balance amount is a positive integer KRW.',
     'For targetMenu balance put one item in balances per income or expense the user states, with action create; money spent or paid is',
     'isIncome false, money received is isIncome true; occurredAt is when it happened, or now if not said. Use action update with targetId',
-    'when the user corrects an existing ledger entry below, and action delete with targetId when they ask to remove one.',
+    'when the user corrects an existing ledger entry below, and action delete with targetId when they ask to remove one. For update and delete',
+    'copy targetId exactly from the first column below and set description to that entry\'s description; update also carries the corrected',
+    'amount, isIncome, or occurredAt. For reschedule and cancel likewise copy targetId exactly and set schedule.title to that schedule\'s title.',
     `existing schedules (id | title | start | state):\n${schedules || '(none)'}`,
     `existing ledger entries (id | description | kind | amount | when):\n${ledger || '(none)'}`,
     `source: ${source}`,
@@ -760,12 +790,13 @@ async function applyIntent(uid, intent, localeLabel) {
   if (mode === 'auto' && menu === 'schedule') {
     const draft = intent.schedule || {};
     const id = draft.action === 'cancel'
-      ? await cancelSchedule(uid, draft.targetId)
+      ? await cancelSchedule(uid, draft.targetId, draft.title)
       : draft.action === 'reschedule'
         ? await rescheduleSchedule(uid, draft.targetId, draft)
         : await saveSchedule(uid, draft);
     savedMenu = id ? 'schedules' : null;
     if (!id) {
+      console.warn('schedule not applied', { action: draft.action || 'create', hasTarget: Boolean(draft.targetId), hasStart: Boolean(draft.startAt) });
       mode = 'none';
     }
   }
@@ -774,6 +805,7 @@ async function applyIntent(uid, intent, localeLabel) {
     const applied = await applyBalanceChanges(uid, changes);
     savedMenu = applied > 0 ? 'balance' : null;
     if (applied === 0) {
+      console.warn('balance not applied', { actions: changes.map((change) => change?.action || 'create') });
       mode = 'none';
     }
   }
