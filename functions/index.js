@@ -138,13 +138,16 @@ async function rescheduleSchedule(uid, targetId, draft) {
   }
   const ref = snap.ref;
   const allDay = typeof draft?.allDay === 'boolean' ? draft.allDay : snap.get('allDay') === true;
-  const start = parseWhen(draft?.startAt, allDay ? 0 : 9, 0);
-  if (!start) {
-    return null;
-  }
   const oldStart = snap.get('startAt').toDate();
   const oldEnd = snap.get('endAt').toDate();
   let end = parseWhen(draft?.endAt, allDay ? 23 : 10, allDay ? 59 : 0);
+  let start = parseWhen(draft?.startAt, allDay ? 0 : 9, 0);
+  if (!start && end) {
+    start = new Date(end.getTime() - Math.max(oldEnd.getTime() - oldStart.getTime(), 30 * 60 * 1000));
+  }
+  if (!start) {
+    return null;
+  }
   if (!end || end <= start) {
     end = new Date(start.getTime() + Math.max(oldEnd.getTime() - oldStart.getTime(), 30 * 60 * 1000));
   }
@@ -259,11 +262,24 @@ async function findTarget(uid, collection, targetId, field, label) {
     return null;
   }
   const matches = await userCol(uid, collection).where(field, '==', wanted).limit(2).get();
-  if (matches.size !== 1) {
-    console.warn('target not found', { collection, hasId: Boolean(id), matches: matches.size });
+  if (matches.size === 1) {
+    return matches.docs[0];
+  }
+  if (matches.size === 0) {
+    // The model sometimes pads the label with extra words, so accept the one entry whose label it contains or that contains it.
+    const recent = await userCol(uid, collection).limit(300).get();
+    const loose = recent.docs.filter((doc) => {
+      const own = String(doc.get(field) || '').trim();
+      return own && (wanted.includes(own) || own.includes(wanted));
+    });
+    if (loose.length === 1) {
+      return loose[0];
+    }
+    console.warn('target not found', { collection, hasId: Boolean(id), loose: loose.length });
     return null;
   }
-  return matches.docs[0];
+  console.warn('target not found', { collection, hasId: Boolean(id), matches: matches.size });
+  return null;
 }
 
 /** Corrects the fields the model gave for an existing entry; the caller recalculates balances. */
@@ -550,8 +566,8 @@ async function commitDeletes(refs) {
 const responseSchema = {
   type: 'OBJECT',
   properties: {
-    targetMenu: { type: 'STRING' },
-    saveMode: { type: 'STRING' },
+    targetMenu: { type: 'STRING', format: 'enum', enum: ['schedule', 'balance', 'weather', 'exchange', 'news', 'calculator', 'general'] },
+    saveMode: { type: 'STRING', format: 'enum', enum: ['auto', 'confirm', 'none'] },
     summaryText: { type: 'STRING' },
     table: {
       type: 'OBJECT',
@@ -569,17 +585,7 @@ const responseSchema = {
         values: { type: 'ARRAY', items: { type: 'NUMBER' } },
       },
     },
-    schedule: {
-      type: 'OBJECT',
-      properties: {
-        action: { type: 'STRING', format: 'enum', enum: ['create', 'reschedule', 'cancel'] },
-        targetId: { type: 'STRING' },
-        title: { type: 'STRING' },
-        startAt: { type: 'STRING' },
-        endAt: { type: 'STRING' },
-        allDay: { type: 'BOOLEAN' },
-      },
-    },
+    // Times are required and written before labels: a rambling title otherwise swallows the rest and the model skips startAt.
     balances: {
       type: 'ARRAY',
       items: {
@@ -587,12 +593,27 @@ const responseSchema = {
         properties: {
           action: { type: 'STRING', format: 'enum', enum: ['create', 'update', 'delete'] },
           targetId: { type: 'STRING' },
-          description: { type: 'STRING' },
           amount: { type: 'INTEGER' },
           isIncome: { type: 'BOOLEAN' },
           occurredAt: { type: 'STRING' },
+          description: { type: 'STRING' },
         },
+        required: ['action', 'amount'],
+        propertyOrdering: ['action', 'targetId', 'amount', 'isIncome', 'occurredAt', 'description'],
       },
+    },
+    schedule: {
+      type: 'OBJECT',
+      properties: {
+        action: { type: 'STRING', format: 'enum', enum: ['create', 'reschedule', 'cancel'] },
+        targetId: { type: 'STRING' },
+        startAt: { type: 'STRING' },
+        endAt: { type: 'STRING' },
+        allDay: { type: 'BOOLEAN' },
+        title: { type: 'STRING' },
+      },
+      required: ['action', 'startAt'],
+      propertyOrdering: ['action', 'targetId', 'startAt', 'endAt', 'allDay', 'title'],
     },
     weather: { type: 'OBJECT', properties: { cityQuery: { type: 'STRING' } } },
     exchange: { type: 'OBJECT', properties: { currencyCode: { type: 'STRING' } } },
@@ -622,7 +643,8 @@ const responseSchema = {
       },
     },
   },
-  required: ['targetMenu', 'saveMode', 'summaryText'],
+  // balances is required (empty when no money is mentioned) because the model otherwise drops it whenever it picks another menu.
+  required: ['targetMenu', 'saveMode', 'summaryText', 'balances'],
 };
 
 async function askGemini(locale, source, text, documentText, schedules, ledger) {
@@ -645,13 +667,15 @@ async function askGemini(locale, source, text, documentText, schedules, ledger) 
     'cancel when the user says an existing event is cancelled or called off. For reschedule and cancel, schedule.targetId must be the id of the',
     'existing schedule below that the user means. For create and reschedule always fill schedule.startAt with the full new ISO-8601 date and time',
     '(for reschedule resolve weekdays and dates from now; keep the old time if only the date changes, keep the old date if only the time changes),',
-    'and schedule.title with the event title. Keep title short and specific.',
+    'and for create fill schedule.title with only the event name in a few words, never notes, reasoning, or the rest of the message.',
     'Balance amount is a positive integer KRW.',
-    'For targetMenu balance put one item in balances per income or expense the user states, with action create; money spent or paid is',
+    'Whenever the user states income or expenses, whatever targetMenu is, put one item in balances per income or expense, with action create; money spent or paid is',
     'isIncome false, money received is isIncome true; occurredAt is when it happened, or now if not said. Use action update with targetId',
     'when the user corrects an existing ledger entry below, and action delete with targetId when they ask to remove one. For update and delete',
     'copy targetId exactly from the first column below and set description to that entry\'s description; update also carries the corrected',
-    'amount, isIncome, or occurredAt. For reschedule and cancel likewise copy targetId exactly and set schedule.title to that schedule\'s title.',
+    'amount, isIncome, or occurredAt. For reschedule and cancel likewise copy targetId exactly and leave schedule.title empty.',
+    'If one message asks for a schedule and also states income or expenses, set targetMenu schedule and saveMode auto, put only the event in',
+    'schedule, and also put every income or expense in balances; never drop the balances.',
     `existing schedules (id | title | start | state):\n${schedules || '(none)'}`,
     `existing ledger entries (id | description | kind | amount | when):\n${ledger || '(none)'}`,
     `source: ${source}`,
@@ -787,27 +811,36 @@ async function applyIntent(uid, intent, localeLabel) {
   let summary = String(intent.summaryText || '');
   let chart = intent.chart && intent.chart.hasChart ? intent.chart : null;
 
-  if (mode === 'auto' && menu === 'schedule') {
-    const draft = intent.schedule || {};
+  // One message may carry a schedule and ledger entries together; `failed` marks any part that could not be applied.
+  let failed = false;
+  const draft = intent.schedule || {};
+  const changes = Array.isArray(intent.balances) ? intent.balances : intent.balance ? [intent.balance] : [];
+  const wantsSchedule = menu === 'schedule' || (menu === 'balance' && Boolean(draft.title && draft.startAt));
+  const wantsBalance = menu === 'balance' || (menu === 'schedule' && changes.length > 0);
+  if (mode === 'auto' && wantsSchedule) {
     const id = draft.action === 'cancel'
       ? await cancelSchedule(uid, draft.targetId, draft.title)
       : draft.action === 'reschedule'
         ? await rescheduleSchedule(uid, draft.targetId, draft)
         : await saveSchedule(uid, draft);
-    savedMenu = id ? 'schedules' : null;
-    if (!id) {
+    if (id) {
+      savedMenu = 'schedules';
+    } else {
       console.warn('schedule not applied', { action: draft.action || 'create', hasTarget: Boolean(draft.targetId), hasStart: Boolean(draft.startAt) });
-      mode = 'none';
+      failed = true;
     }
   }
-  if (mode === 'auto' && menu === 'balance') {
-    const changes = Array.isArray(intent.balances) ? intent.balances : intent.balance ? [intent.balance] : [];
+  if (mode === 'auto' && wantsBalance) {
     const applied = await applyBalanceChanges(uid, changes);
-    savedMenu = applied > 0 ? 'balance' : null;
-    if (applied === 0) {
+    if (applied > 0) {
+      savedMenu = savedMenu || 'balance';
+    } else {
       console.warn('balance not applied', { actions: changes.map((change) => change?.action || 'create') });
-      mode = 'none';
+      failed = true;
     }
+  }
+  if (failed && !savedMenu) {
+    mode = 'none';
   }
   if (mode === 'auto' && menu === 'weather') {
     const key = readSecret(openWeatherKey);
@@ -863,8 +896,21 @@ async function applyIntent(uid, intent, localeLabel) {
     extractedSchedules: awaitingConfirm ? extractedSchedules : [],
     extractedBalances: awaitingConfirm ? extractedBalances : [],
     localeLabel,
+    failed,
   };
 }
+
+const notAppliedText = {
+  ko: '요청하신 변경을 적용하지 못했습니다. 일정이나 내역의 이름과 날짜·시간을 조금 더 구체적으로 말씀해 주세요.',
+  en: 'I could not apply that change. Please name the item and its date and time a little more specifically.',
+  ja: '変更を反映できませんでした。予定や項目の名前と日時をもう少し具体的に教えてください。',
+};
+
+const partlyAppliedText = {
+  ko: '(일부 항목은 적용하지 못했습니다. 빠진 항목을 다시 말씀해 주세요.)',
+  en: '(Some items could not be applied. Please say the missing ones again.)',
+  ja: '(一部の項目は反映できませんでした。抜けた項目をもう一度お伝えください。)',
+};
 
 async function loadUpload(uid, filePath) {
   if (!filePath.startsWith(`uploads/${uid}/`)) {
@@ -1030,7 +1076,21 @@ exports.submitPrompt = onCall({ region, secrets: [openWeatherKey, exchangeKey, g
     if (filePath && ((intent.extractedSchedules || []).length || (intent.extractedBalances || []).length)) {
       intent.saveMode = 'confirm';
     }
-    const applied = await applyIntent(uid, intent, locale);
+    let applied = await applyIntent(uid, intent, locale);
+    // The model occasionally drops a time or garbles a title; nothing was saved, so asking once more cannot duplicate anything.
+    if (applied.failed && !applied.savedMenu && !filePath) {
+      applied = await applyIntent(uid, await askGemini(locale, 'text', text, '', schedules, ledger), locale);
+    }
+    if (applied.failed) {
+      const lang = notAppliedText[locale.slice(0, 2)] ? locale.slice(0, 2) : 'ko';
+      if (applied.savedMenu) {
+        applied.aiText = `${applied.aiText}\n${partlyAppliedText[lang]}`;
+      } else {
+        applied.aiText = notAppliedText[lang];
+        applied.table = null;
+        applied.chart = null;
+      }
+    }
     const turn = await writeTurn(uid, {
       userText: text || fileName,
       isVoice: request.data.isVoice === true,
