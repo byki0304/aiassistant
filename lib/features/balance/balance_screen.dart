@@ -225,6 +225,7 @@ class _EntryTable extends StatefulWidget {
 class _EntryTableState extends State<_EntryTable> {
   static const _pageSize = 6;
   final _checked = <String>{};
+  final _expanded = <String>{};
   int _page = 0;
   bool _deleting = false;
 
@@ -233,7 +234,9 @@ class _EntryTableState extends State<_EntryTable> {
   @override
   void didUpdateWidget(_EntryTable oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _checked.retainAll(widget.items.map((item) => item.id));
+    final ids = widget.items.map((item) => item.id).toSet();
+    _checked.retainAll(ids);
+    _expanded.retainAll(ids);
     _page = _page.clamp(0, _pageCount - 1);
   }
 
@@ -321,79 +324,77 @@ class _EntryTableState extends State<_EntryTable> {
 
   Widget _row(BalanceItem item, AppText text) {
     final checked = _checked.contains(item.id);
-    void toggle() => setState(() => checked ? _checked.remove(item.id) : _checked.add(item.id));
+    final expanded = _expanded.contains(item.id);
     final color = item.isIncome ? _incomeColor : _expenseColor;
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
-      child: Semantics(
-        container: true,
-        checked: checked,
-        label: '${text.selectEntry}: ${item.description}',
-        onTap: _deleting ? null : toggle,
-        excludeSemantics: true,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: _deleting ? null : toggle,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            padding: const EdgeInsets.fromLTRB(8, 7, 10, 7),
-            decoration: BoxDecoration(
-              color: checked ? Toon.cream : Toon.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Toon.ink, width: checked ? 2.2 : 1.6),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.fromLTRB(0, 0, 10, 0),
+        decoration: BoxDecoration(
+          color: checked ? Toon.cream : Toon.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Toon.ink, width: checked ? 2.2 : 1.6),
+        ),
+        child: Row(
+          crossAxisAlignment: expanded ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 38,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: RowCheck(
+                  checked: checked,
+                  size: 18,
+                  label: '${text.selectEntry}: ${item.description}',
+                  onChanged: _deleting ? null : () => setState(() => checked ? _checked.remove(item.id) : _checked.add(item.id)),
+                ),
+              ),
             ),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 30,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: ToonCheck(checked: checked, size: 18),
-                  ),
-                ),
-                SizedBox(
-                  width: 64,
-                  child: Text(
-                    widget.first(item),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-                  ),
-                ),
-                SizedBox(
-                  width: 58,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(20)),
-                      child: Text(
-                        item.isIncome ? text.weekIncome : text.weekExpense,
-                        style: const TextStyle(color: Toon.white, fontSize: 11, fontWeight: FontWeight.w800),
+            Expanded(
+              child: RowToggle(
+                expanded: expanded,
+                onToggle: () => setState(() => expanded ? _expanded.remove(item.id) : _expanded.add(item.id)),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 7),
+                  child: Row(
+                    crossAxisAlignment: expanded ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 64,
+                        child: RowText(widget.first(item), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
                       ),
-                    ),
+                      SizedBox(
+                        width: 58,
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(20)),
+                            child: Text(
+                              item.isIncome ? text.weekIncome : text.weekExpense,
+                              style: const TextStyle(color: Toon.white, fontSize: 11, fontWeight: FontWeight.w800),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: RowText(item.description, style: const TextStyle(fontWeight: FontWeight.w800)),
+                      ),
+                      SizedBox(
+                        width: 92,
+                        child: RowText(
+                          '${item.isIncome ? '+' : '-'}${widget.money.format(item.amount)}',
+                          textAlign: TextAlign.right,
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: color),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                Expanded(
-                  child: Text(
-                    item.description,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                ),
-                SizedBox(
-                  width: 92,
-                  child: Text(
-                    '${item.isIncome ? '+' : '-'}${widget.money.format(item.amount)}',
-                    textAlign: TextAlign.right,
-                    maxLines: 1,
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: color),
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );

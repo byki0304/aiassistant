@@ -193,10 +193,8 @@ class CalculatorWidget extends ConsumerWidget {
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
+                  child: RowText(
                     record.expression,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.w900, fontFeatures: [FontFeature.tabularFigures()]),
                   ),
                 ),

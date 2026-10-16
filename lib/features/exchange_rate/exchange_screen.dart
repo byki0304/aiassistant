@@ -91,18 +91,14 @@ class _ExchangeScreenState extends ConsumerState<ExchangeScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        RowText(
                           item.currencyCode == 'JPY' && item.ratePerHundred != null
                               ? '100 JPY = ${number.format(item.ratePerHundred)} KRW'
                               : '1 ${item.currencyCode} = ${number.format(item.rateToKrw)} KRW',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14.5),
                         ),
-                        Text(
+                        RowText(
                           '${item.currencyLabel} · ${DateFormat.MMMd(locale).add_Hm().format(item.searchedAt.toLocal())}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 11.5, color: Toon.inkSoft, fontWeight: FontWeight.w600),
                         ),
                       ],

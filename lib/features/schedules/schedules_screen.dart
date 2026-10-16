@@ -154,10 +154,8 @@ class _SchedulesScreenState extends ConsumerState<SchedulesScreen> {
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
+                  child: RowText(
                     item.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontWeight: FontWeight.w800, color: item.cancelled ? Toon.inkSoft : Toon.ink),
                   ),
                 ),

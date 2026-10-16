@@ -90,16 +90,12 @@ class _WeatherScreenState extends ConsumerState<WeatherScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        RowText(
                           '${item.cityName}  ${item.temperature.toStringAsFixed(1)}°C',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14.5),
                         ),
-                        Text(
+                        RowText(
                           '${item.condition} · ${item.humidity}% · ${DateFormat.MMMd(locale).add_Hm().format(item.searchedAt.toLocal())}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 11.5, color: Toon.inkSoft, fontWeight: FontWeight.w600),
                         ),
                       ],

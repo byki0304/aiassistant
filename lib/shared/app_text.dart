@@ -175,6 +175,19 @@ class AppText {
   String get soundOff => _t('소리 끄기', 'Sound off', '消音');
   String get skipIntro => _t('건너뛰기', 'Skip', 'スキップ');
   String get introSetting => _t('시작할 때 인트로 영상 보기', 'Play the intro on start', '起動時にイントロを再生');
+  String get fontSize => _t('글자크기', 'Text size', '文字サイズ');
+  String get lineSpacing => _t('줄간 거리', 'Line spacing', '行間');
+  String get smaller => _t('작게', 'Smaller', '小さく');
+  String get larger => _t('크게', 'Larger', '大きく');
+  String get narrower => _t('좁게', 'Tighter', '狭く');
+  String get wider => _t('넓게', 'Wider', '広く');
+  String get defaultLevel => _t('기본', 'Default', '標準');
+  String levelOf(int level) => _t('$level단계', 'Level $level', '$level段階');
+  String get readingPreview => _t(
+    '오늘 오후 3시 회의, 점심값 12,000원. 글자와 줄 간격이 이렇게 보입니다.',
+    'Meeting at 3 pm, lunch ₩12,000. This is how text and line spacing look.',
+    '今日の午後3時に会議、昼食代12,000ウォン。文字と行間はこのように見えます。',
+  );
   String get uploadFile => _t('파일 업로드', 'Upload file', 'ファイル');
   String get runAi => _t('AI 실행', 'Run AI', 'AI実行');
   String get inputHint => _t(
@@ -197,6 +210,8 @@ class AppText {
   String get columnDescription => _t('내역', 'Details', '内訳');
   String get columnAmount => _t('금액', 'Amount', '金額');
   String get selectEntry => _t('내역 선택', 'Select entry', '項目を選択');
+  String get expandRow => _t('전체 내용 보기', 'Show everything', '全文を表示');
+  String get collapseRow => _t('원래 크기로', 'Show less', '元の大きさに戻す');
   String get scheduleList => _t('등록된 스케줄 목록', 'Saved schedules', '登録済みの予定');
   String get calcHistory => _t('계산 기록', 'Calculation history', '計算履歴');
   String get calcHistoryEmpty => _t('= 을 누르면 계산 결과가 여기에 남습니다.', 'Press = and the result is kept here.', '= を押すと計算結果がここに残ります。');

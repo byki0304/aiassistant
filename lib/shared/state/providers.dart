@@ -60,6 +60,48 @@ class LocaleController extends Notifier<Locale> {
   }
 }
 
+/// Levels 1 to 5 for a reading setting; [fallback] is the level that leaves the app as designed.
+class LevelController extends Notifier<int> {
+  LevelController(this._key, this.fallback);
+
+  static const min = 1;
+  static const max = 5;
+
+  final String _key;
+  final int fallback;
+
+  @override
+  int build() {
+    SharedPreferences.getInstance().then((prefs) {
+      final stored = prefs.getInt(_key);
+      if (stored != null && stored != state) {
+        state = stored.clamp(min, max);
+      }
+    });
+    return fallback;
+  }
+
+  Future<void> set(int level) async {
+    state = level.clamp(min, max);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_key, state);
+  }
+}
+
+/// Text size, 10% per level around the designed size at level 3.
+final fontLevelProvider = NotifierProvider<LevelController, int>(() => LevelController('fontLevel', 3));
+
+/// Line spacing, 10% per level around the designed spacing at level 4.
+final lineLevelProvider = NotifierProvider<LevelController, int>(() => LevelController('lineLevel', 4));
+
+double fontScaleFor(int level) => 1 + (level - 3) * 0.1;
+
+/// Noto Sans' own line height as a multiple of the font size, which most text uses today.
+const _designedLineHeight = 1.45;
+
+/// Null keeps every text's designed line height; other levels set one height app-wide.
+double? lineHeightFor(int level) => level == 4 ? null : _designedLineHeight * (1 + (level - 4) * 0.1);
+
 enum AppMenu { schedules, balance, weather, exchange, news, calculator }
 
 AppMenu? menuById(String? id) => switch (id) {

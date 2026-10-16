@@ -119,18 +119,21 @@ class _NewsScreenState extends ConsumerState<NewsScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              item.title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontWeight: FontWeight.w800, height: 1.3),
-                            ),
-                            Text(
+                            RowText(item.title, lines: 2, style: const TextStyle(fontWeight: FontWeight.w800, height: 1.3)),
+                            RowText(
                               '${item.source} · ${DateFormat.MMMd(locale).add_Hm().format(item.publishedAt.toLocal())}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontSize: 11.5, color: Toon.inkSoft, fontWeight: FontWeight.w600),
                             ),
+                            if (item.summary.isNotEmpty)
+                              RowMore(
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 6),
+                                  child: Text(
+                                    item.summary,
+                                    style: const TextStyle(fontSize: 12.5, height: 1.4, fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                              ),
                           ],
                         ),
                       ),

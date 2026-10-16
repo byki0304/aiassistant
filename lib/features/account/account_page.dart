@@ -13,6 +13,7 @@ import '../../shared/theme/toon_icons.dart';
 import '../../shared/theme/toon_widgets.dart';
 import '../../shared/widgets/language_picker.dart';
 import '../../shared/widgets/menu_body.dart';
+import '../../shared/widgets/reading_settings.dart';
 
 class AccountPage extends ConsumerStatefulWidget {
   const AccountPage({super.key});
@@ -166,6 +167,8 @@ class _AccountPageState extends ConsumerState<AccountPage> {
           Text(text.language, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5)),
           const SizedBox(height: 6),
           const LanguagePicker(),
+          const SizedBox(height: 12),
+          const ReadingSettings(),
           const SizedBox(height: 10),
           Row(
             children: [

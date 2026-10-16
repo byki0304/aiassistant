@@ -12,6 +12,7 @@ import 'pages/app_shell.dart';
 import 'shared/state/providers.dart';
 import 'shared/theme/toon.dart';
 import 'shared/theme/toon_widgets.dart';
+import 'shared/widgets/reading_settings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -43,6 +44,7 @@ class AiAssistantApp extends ConsumerWidget {
         GlobalCupertinoLocalizations.delegate,
       ],
       theme: toonTheme(textTheme),
+      builder: (context, child) => ReadingScale(child: child!),
       home: const AppGate(),
     );
   }
