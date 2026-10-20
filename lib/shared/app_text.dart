@@ -189,6 +189,7 @@ class AppText {
     '今日の午後3時に会議、昼食代12,000ウォン。文字と行間はこのように見えます。',
   );
   String get uploadFile => _t('파일 업로드', 'Upload file', 'ファイル');
+  String get clearInput => _t('입력 지우기', 'Clear input', '入力を消去');
   String get runAi => _t('AI 실행', 'Run AI', 'AI実行');
   String get inputHint => _t(
     '일정, 장부, 날씨, 환율, 뉴스 검색과 파일 분석을 이곳에 입력하세요.',

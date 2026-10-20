@@ -27,12 +27,16 @@ class ChatPane extends ConsumerStatefulWidget {
 
 class _ChatPaneState extends ConsumerState<ChatPane> {
   final _input = TextEditingController();
+  final _inputFocus = FocusNode();
   final _scroll = ScrollController();
   final _speech = SpeechToText();
   PlatformFile? _file;
   bool _listening = false;
   bool _spoken = false;
   bool _deleting = false;
+
+  /// Bumped whenever a listening session is abandoned, so its late results cannot refill the input.
+  int _voiceSession = 0;
 
   /// Checked bubbles, keyed by [_promptKey] and [_answerKey].
   final _checked = <String>{};
@@ -43,6 +47,7 @@ class _ChatPaneState extends ConsumerState<ChatPane> {
   @override
   void dispose() {
     _input.dispose();
+    _inputFocus.dispose();
     _scroll.dispose();
     _speech.cancel();
     super.dispose();
@@ -179,14 +184,66 @@ class _ChatPaneState extends ConsumerState<ChatPane> {
         }
         return KeyEventResult.ignored;
       },
-      child: TextField(
-        controller: _input,
-        minLines: minLines,
-        maxLines: maxLines,
-        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-        decoration: InputDecoration(hintText: _listening ? text.listening : text.inputHint, fillColor: Toon.cream.withValues(alpha: 0.55)),
+      child: Stack(
+        children: [
+          TextField(
+            controller: _input,
+            focusNode: _inputFocus,
+            minLines: minLines,
+            maxLines: maxLines,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            decoration: InputDecoration(
+              hintText: _listening ? text.listening : text.inputHint,
+              fillColor: Toon.cream.withValues(alpha: 0.55),
+              contentPadding: const EdgeInsets.fromLTRB(14, 12, 28, 12),
+            ),
+          ),
+          Positioned(
+            right: 4,
+            bottom: 4,
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _input,
+              builder: (context, value, _) => value.text.isEmpty
+                  ? const SizedBox.shrink()
+                  : Tooltip(
+                      message: text.clearInput,
+                      child: Semantics(
+                        button: true,
+                        label: text.clearInput,
+                        child: InkResponse(
+                          onTap: () => _clearInput(locale),
+                          radius: 14,
+                          child: const Padding(
+                            padding: EdgeInsets.all(3),
+                            child: Icon(Icons.close_rounded, size: 14, color: Colors.grey),
+                          ),
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  /// Empties the input and gets ready for the same kind of input again: listening if the text was spoken, typing otherwise.
+  Future<void> _clearInput(String locale) async {
+    final wasVoice = _listening || _spoken;
+    _voiceSession += 1;
+    if (_listening) {
+      await _speech.cancel();
+    }
+    _input.clear();
+    setState(() {
+      _listening = false;
+      _spoken = false;
+    });
+    if (wasVoice) {
+      await _toggleVoice(locale);
+    } else {
+      _inputFocus.requestFocus();
+    }
   }
 
   Widget _fileTag() {
@@ -747,8 +804,12 @@ class _ChatPaneState extends ConsumerState<ChatPane> {
     // Android Chrome repeats earlier words in every continuous result, so it gets one final utterance instead.
     final androidWeb = kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     setState(() => _listening = true);
+    final session = _voiceSession;
     await _speech.listen(
       onResult: (result) {
+        if (session != _voiceSession) {
+          return;
+        }
         _spoken = result.recognizedWords.isNotEmpty;
         _input.text = result.recognizedWords;
         _input.selection = TextSelection.collapsed(offset: _input.text.length);
