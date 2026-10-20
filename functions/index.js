@@ -49,9 +49,13 @@ function plain(value) {
   }
   return value;
 }
-// Everything a user enters or receives is kept at most this long, in every store.
+// Everything a user enters or receives is kept at most this long, in every store; schedules and ledger entries
+// (`recordCollections`) are kept longer.
 const memberRetentionMs = 240 * 60 * 60 * 1000;
 const guestRetentionMs = 72 * 60 * 60 * 1000;
+const memberRecordRetentionMs = 12000 * 60 * 60 * 1000;
+const guestRecordRetentionMs = 2400 * 60 * 60 * 1000;
+const recordCollections = ['schedules', 'balance_entries'];
 
 function retentionFor(request) {
   return request.auth?.token?.firebase?.sign_in_provider === 'anonymous' ? guestRetentionMs : memberRetentionMs;
@@ -1625,7 +1629,10 @@ const createdFields = {
 // The purge runs every 10 minutes and removes whatever would pass its limit before the next run, so nothing outlives it.
 const purgeLeadMs = 15 * 60 * 1000;
 
-/** Guests (anonymous accounts, or accounts already gone) keep data 72 hours, signed-in users 240 hours. */
+/**
+ * Guests (anonymous accounts, or accounts already gone) keep data 72 hours, signed-in users 240 hours; see
+ * `collectionRetentionMs` for schedules and ledger entries.
+ */
 async function retentionOf(uid) {
   try {
     const user = await getAuth().getUser(uid);
@@ -1638,19 +1645,28 @@ async function retentionOf(uid) {
   }
 }
 
+function collectionRetentionMs(name, baseMs) {
+  if (!recordCollections.includes(name)) {
+    return baseMs;
+  }
+  return baseMs === guestRetentionMs ? guestRecordRetentionMs : memberRecordRetentionMs;
+}
+
 function createdMs(doc, field) {
   const stamp = doc.get(field);
   return stamp && typeof stamp.toMillis === 'function' ? stamp.toMillis() : doc.createTime.toMillis();
 }
 
 /**
- * Deletes one user's documents created at or before `cutoff` in `database`. The regular pass queries the creation field;
- * the daily full pass also catches documents that lack it. Returns the names of collections that lost documents.
+ * Deletes one user's documents that would outlive their collection's retention before the next run. The regular pass
+ * queries the creation field; the daily full pass also catches documents that lack it. Returns the names of collections
+ * that lost documents.
  */
-async function purgeUserData(database, uid, cutoff, fullScan) {
+async function purgeUserData(database, uid, now, baseMs, fullScan) {
   const touched = [];
   const writer = database.bulkWriter();
   for (const [name, field] of Object.entries(createdFields)) {
+    const cutoff = now - collectionRetentionMs(name, baseMs) + purgeLeadMs;
     const col = database.collection('users').doc(uid).collection(name);
     const snap = fullScan ? await col.get() : await col.where(field, '<=', Timestamp.fromMillis(cutoff)).get();
     const expired = snap.docs.filter((doc) => createdMs(doc, field) <= cutoff);
@@ -1706,12 +1722,11 @@ async function purgeRetention(now, fullScan) {
     try {
       const keepMs = await retentionOf(uid);
       retention.set(uid, keepMs);
-      const cutoff = now - keepMs + purgeLeadMs;
-      const touched = await purgeUserData(db(), uid, cutoff, fullScan);
+      const touched = await purgeUserData(db(), uid, now, keepMs, fullScan);
       if (touched.includes('balance_entries')) {
         await recalculateBalances(uid);
       }
-      await purgeUserData(backupDb(), uid, cutoff, fullScan);
+      await purgeUserData(backupDb(), uid, now, keepMs, fullScan);
     } catch (error) {
       console.error('retention purge failed for a user', error.message);
     }
