@@ -91,7 +91,11 @@ class _WeatherScreenState extends ConsumerState<WeatherScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         RowText(
-                          '${item.cityName}  ${item.temperature.toStringAsFixed(1)}°C',
+                          item.forDate == null
+                              ? '${item.cityName}  ${item.temperature.toStringAsFixed(1)}°C'
+                              : '${item.cityName} · ${DateFormat.MMMEd(locale).format(DateTime.parse(item.forDate!))}  '
+                                    '${item.temperature.toStringAsFixed(1)}°'
+                                    '${item.temperatureMin == null ? '' : ' / ${item.temperatureMin!.toStringAsFixed(1)}°'}C',
                           style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14.5),
                         ),
                         RowText(

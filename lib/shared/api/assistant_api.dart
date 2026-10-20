@@ -342,15 +342,23 @@ class WeatherItem {
     required this.humidity,
     required this.searchedAt,
     required this.expireAt,
+    this.temperatureMin,
+    this.forDate,
   });
 
   final String id;
   final String cityName;
+
+  /// The current temperature, or the day's high when [forDate] is set.
   final double temperature;
+  final double? temperatureMin;
   final String condition;
   final int humidity;
   final DateTime searchedAt;
   final DateTime expireAt;
+
+  /// The forecast or recorded day (YYYY-MM-DD); null for current weather.
+  final String? forDate;
 
   bool get isLive => isUnexpired(expireAt, DateTime.now());
 
@@ -367,6 +375,8 @@ class WeatherItem {
       humidity: (data['humidity'] as num?)?.round() ?? 0,
       searchedAt: readTime(data['searchedAt']),
       expireAt: readTime(data['expireAt']),
+      temperatureMin: (data['temperatureMin'] as num?)?.toDouble(),
+      forDate: data['forDate'] as String?,
     );
   }
 }
@@ -380,6 +390,7 @@ class ExchangeItem {
     required this.ratePerHundred,
     required this.searchedAt,
     required this.expireAt,
+    this.rateDate,
   });
 
   final String id;
@@ -389,6 +400,9 @@ class ExchangeItem {
   final double? ratePerHundred;
   final DateTime searchedAt;
   final DateTime expireAt;
+
+  /// The business day a past rate was quoted for (YYYY-MM-DD); null for the live rate.
+  final String? rateDate;
 
   bool get isLive => isUnexpired(expireAt, DateTime.now());
 
@@ -405,6 +419,7 @@ class ExchangeItem {
       ratePerHundred: (data['ratePerHundred'] as num?)?.toDouble(),
       searchedAt: readTime(data['searchedAt']),
       expireAt: readTime(data['expireAt']),
+      rateDate: data['rateDate'] as String?,
     );
   }
 }

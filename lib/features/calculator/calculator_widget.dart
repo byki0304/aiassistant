@@ -280,7 +280,7 @@ class CalculatorWidget extends ConsumerWidget {
       return;
     }
     final latest = <String, ExchangeItem>{};
-    for (final rate in rates) {
+    for (final rate in rates.where((rate) => rate.rateDate == null)) {
       latest.putIfAbsent(rate.currencyCode, () => rate);
     }
     if (latest.isEmpty) {

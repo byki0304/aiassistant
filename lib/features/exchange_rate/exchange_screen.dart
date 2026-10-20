@@ -98,7 +98,9 @@ class _ExchangeScreenState extends ConsumerState<ExchangeScreen> {
                           style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14.5),
                         ),
                         RowText(
-                          '${item.currencyLabel} · ${DateFormat.MMMd(locale).add_Hm().format(item.searchedAt.toLocal())}',
+                          item.rateDate == null
+                              ? '${item.currencyLabel} · ${DateFormat.MMMd(locale).add_Hm().format(item.searchedAt.toLocal())}'
+                              : '${item.currencyLabel} · ${DateFormat.yMMMd(locale).format(DateTime.parse(item.rateDate!))}',
                           style: const TextStyle(fontSize: 11.5, color: Toon.inkSoft, fontWeight: FontWeight.w600),
                         ),
                       ],

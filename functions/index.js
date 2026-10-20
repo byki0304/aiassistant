@@ -1,5 +1,6 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { onDocumentWritten } = require('firebase-functions/v2/firestore');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue, Timestamp } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
@@ -48,7 +49,13 @@ function plain(value) {
   }
   return value;
 }
-const ttlMs = 120 * 60 * 60 * 1000;
+// Everything a user enters or receives is kept at most this long, in every store.
+const memberRetentionMs = 240 * 60 * 60 * 1000;
+const guestRetentionMs = 72 * 60 * 60 * 1000;
+
+function retentionFor(request) {
+  return request.auth?.token?.firebase?.sign_in_provider === 'anonymous' ? guestRetentionMs : memberRetentionMs;
+}
 
 function readSecret(param) {
   try {
@@ -381,21 +388,55 @@ const cityQueries = {
   부산: 'Busan,KR',
 };
 
+const defaultCityQuery = 'Seoul,KR';
+
 function resolveCityQuery(input) {
   const text = String(input || '').trim();
-  return cityQueries[text] || cityQueries[text.toLowerCase()] || text;
+  return cityQueries[text] || cityQueries[text.toLowerCase()] || text || defaultCityQuery;
 }
 
-async function fetchWeather(query, key) {
+function lang2(locale) {
+  const lang = String(locale || '').slice(0, 2);
+  return ['ko', 'en', 'ja'].includes(lang) ? lang : 'ko';
+}
+
+/** Today's calendar date in Asia/Seoul as YYYY-MM-DD. */
+function seoulToday() {
+  return seoulIso(new Date()).slice(0, 10);
+}
+
+function validDate(value) {
+  const text = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) && !Number.isNaN(Date.parse(`${text}T00:00:00Z`)) ? text : '';
+}
+
+function daysBetween(from, to) {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / (24 * 60 * 60 * 1000));
+}
+
+function dateLabel(date, locale) {
+  const tag = { ko: 'ko-KR', en: 'en-US', ja: 'ja-JP' }[lang2(locale)];
+  return new Intl.DateTimeFormat(tag, { month: 'long', day: 'numeric', weekday: 'short', timeZone: 'UTC' }).format(
+    new Date(`${date}T00:00:00Z`),
+  );
+}
+
+async function geocode(query, key) {
   const geoRes = await fetch(
     `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(query)}&limit=1&appid=${key}`,
   );
   const geo = await geoRes.json();
-  if (!Array.isArray(geo) || geo.length === 0) {
+  return Array.isArray(geo) && geo.length > 0 ? { lat: geo[0].lat, lon: geo[0].lon } : null;
+}
+
+async function fetchWeather(query, key, locale = 'ko') {
+  const place = await geocode(query, key);
+  if (!place) {
     return null;
   }
+  const owLang = { ko: 'kr', en: 'en', ja: 'ja' }[lang2(locale)];
   const weatherRes = await fetch(
-    `https://api.openweathermap.org/data/2.5/weather?lat=${geo[0].lat}&lon=${geo[0].lon}&units=metric&lang=kr&appid=${key}`,
+    `https://api.openweathermap.org/data/2.5/weather?lat=${place.lat}&lon=${place.lon}&units=metric&lang=${owLang}&appid=${key}`,
   );
   const weather = await weatherRes.json();
   if (!weather.main) {
@@ -408,21 +449,107 @@ async function fetchWeather(query, key) {
   };
 }
 
-async function storeWeather(uid, cityName, reading) {
+const weatherCodeText = [
+  [[0], '맑음', 'Clear', '晴れ'],
+  [[1, 2], '구름 조금', 'Partly cloudy', '晴れ時々曇り'],
+  [[3], '흐림', 'Overcast', '曇り'],
+  [[45, 48], '안개', 'Fog', '霧'],
+  [[51, 53, 55, 56, 57], '이슬비', 'Drizzle', '霧雨'],
+  [[61, 63, 65, 66, 67, 80, 81, 82], '비', 'Rain', '雨'],
+  [[71, 73, 75, 77, 85, 86], '눈', 'Snow', '雪'],
+  [[95, 96, 99], '뇌우', 'Thunderstorm', '雷雨'],
+];
+
+function weatherCodeName(code, locale) {
+  const row = weatherCodeText.find(([codes]) => codes.includes(Number(code)));
+  const index = { ko: 1, en: 2, ja: 3 }[lang2(locale)];
+  return row ? row[index] : '';
+}
+
+/**
+ * Daily weather for one date at the place: Open-Meteo forecast covers the last two months and the next 15 days,
+ * its archive covers older dates. Returns null when the date is beyond the forecast range.
+ */
+async function fetchDailyWeather(query, date, key, locale) {
+  const ahead = daysBetween(seoulToday(), date);
+  if (ahead > 15) {
+    return null;
+  }
+  const place = await geocode(query, key);
+  if (!place) {
+    return null;
+  }
+  const archive = ahead < -60;
+  const fields = archive
+    ? 'weather_code,temperature_2m_max,temperature_2m_min,relative_humidity_2m_mean'
+    : 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,relative_humidity_2m_mean';
+  const host = archive ? 'https://archive-api.open-meteo.com/v1/archive' : 'https://api.open-meteo.com/v1/forecast';
+  const response = await fetch(
+    `${host}?latitude=${place.lat}&longitude=${place.lon}&daily=${fields}&timezone=auto&start_date=${date}&end_date=${date}`,
+  );
+  const daily = (await response.json()).daily;
+  const max = daily?.temperature_2m_max?.[0];
+  if (typeof max !== 'number') {
+    return null;
+  }
+  const min = daily.temperature_2m_min?.[0];
+  const rain = daily.precipitation_probability_max?.[0];
+  return {
+    temperature: max,
+    temperatureMin: typeof min === 'number' ? min : null,
+    precipitation: typeof rain === 'number' ? rain : null,
+    condition: weatherCodeName(daily.weather_code?.[0], locale),
+    humidity: Math.round(Number(daily.relative_humidity_2m_mean?.[0] ?? 0)),
+    forDate: date,
+  };
+}
+
+/** Current weather when no date or today is asked, otherwise that day's forecast or record. */
+async function readWeather(query, date, key, locale) {
+  if (!key) {
+    return null;
+  }
+  const day = validDate(date);
+  return !day || day === seoulToday() ? fetchWeather(query, key, locale) : fetchDailyWeather(query, day, key, locale);
+}
+
+function weatherSummary(locale, city, reading) {
+  const lang = lang2(locale);
+  const t = (value) => `${Number(value).toFixed(1)}°C`;
+  if (!reading.forDate) {
+    return {
+      ko: `${city} 현재 날씨: ${reading.condition}, ${t(reading.temperature)}, 습도 ${reading.humidity}%`,
+      en: `${city} now: ${reading.condition}, ${t(reading.temperature)}, humidity ${reading.humidity}%`,
+      ja: `${city}の現在の天気: ${reading.condition}、${t(reading.temperature)}、湿度 ${reading.humidity}%`,
+    }[lang];
+  }
+  const day = dateLabel(reading.forDate, locale);
+  const low = reading.temperatureMin == null ? '' : { ko: ` / 최저 ${t(reading.temperatureMin)}`, en: ` / low ${t(reading.temperatureMin)}`, ja: ` / 最低 ${t(reading.temperatureMin)}` }[lang];
+  const rain = reading.precipitation == null ? '' : { ko: `, 강수확률 ${reading.precipitation}%`, en: `, ${reading.precipitation}% chance of rain`, ja: `、降水確率 ${reading.precipitation}%` }[lang];
+  return {
+    ko: `${city} ${day} 날씨: ${reading.condition}, 최고 ${t(reading.temperature)}${low}${rain}, 습도 ${reading.humidity}%`,
+    en: `${city} on ${day}: ${reading.condition}, high ${t(reading.temperature)}${low}${rain}, humidity ${reading.humidity}%`,
+    ja: `${city} ${day}の天気: ${reading.condition}、最高 ${t(reading.temperature)}${low}${rain}、湿度 ${reading.humidity}%`,
+  }[lang];
+}
+
+async function storeWeather(uid, cityName, reading, retentionMs) {
   const now = new Date();
-  const expire = new Date(now.getTime() + ttlMs);
+  const expire = new Date(now.getTime() + retentionMs);
   const ref = userCol(uid, 'weather_logs').doc();
   const data = {
     uid,
     cityName,
     temperature: reading.temperature,
+    temperatureMin: reading.temperatureMin ?? null,
     condition: reading.condition,
     humidity: reading.humidity,
+    forDate: reading.forDate || null,
     searchedAt: Timestamp.fromDate(now),
     expireAt: Timestamp.fromDate(expire),
   };
   await ref.set(data);
-  await audit(uid, 'create', ref.id, ['cityName', 'temperature', 'condition', 'humidity', 'expireAt']);
+  await audit(uid, 'create', ref.id, ['cityName', 'temperature', 'condition', 'humidity', 'forDate', 'expireAt']);
   return {
     id: ref.id,
     ...data,
@@ -440,9 +567,48 @@ async function fetchRate(code, key) {
   return body.conversion_rate;
 }
 
-async function storeRate(uid, label, code, rate) {
+/**
+ * KRW per one unit of `code`: the live rate for today or no date, the European Central Bank reference rate for a past
+ * date (its `date` is the business day actually quoted), and null for a future date.
+ */
+async function readRate(code, date, key) {
+  const day = validDate(date);
+  const today = seoulToday();
+  if (!day || day === today) {
+    const rate = key ? await fetchRate(code, key) : null;
+    return rate == null ? null : { rate, date: null };
+  }
+  if (day > today) {
+    return null;
+  }
+  const response = await fetch(`https://api.frankfurter.dev/v1/${day}?base=${code}&symbols=KRW`);
+  const body = await response.json();
+  const rate = body?.rates?.KRW;
+  return typeof rate === 'number' ? { rate, date: String(body.date || day), asked: day } : null;
+}
+
+function rateSummary(locale, code, quote) {
+  const lang = lang2(locale);
+  const unit = code === 'JPY' ? 100 : 1;
+  const value = (quote.rate * unit).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pair = `${unit} ${code} = ${value} KRW`;
+  if (!quote.date) {
+    return { ko: `현재 환율: ${pair}`, en: `Current rate: ${pair}`, ja: `現在のレート: ${pair}` }[lang];
+  }
+  const day = dateLabel(quote.date, locale);
+  const shifted = quote.date !== quote.asked
+    ? { ko: ` (${dateLabel(quote.asked, locale)}은 고시일이 아니어서 직전 영업일 기준)`, en: ` (${dateLabel(quote.asked, locale)} had no fixing, so the previous business day)`, ja: ` (${dateLabel(quote.asked, locale)}は公示日でないため直前の営業日)` }[lang]
+    : '';
+  return {
+    ko: `${day} 기준 환율: ${pair}${shifted} · 유럽중앙은행 기준환율`,
+    en: `Rate on ${day}: ${pair}${shifted} · European Central Bank reference rate`,
+    ja: `${day}のレート: ${pair}${shifted} · 欧州中央銀行の参照レート`,
+  }[lang];
+}
+
+async function storeRate(uid, label, code, rate, retentionMs, rateDate = null) {
   const now = new Date();
-  const expire = new Date(now.getTime() + ttlMs);
+  const expire = new Date(now.getTime() + retentionMs);
   const ref = userCol(uid, 'exchange_logs').doc();
   const data = {
     uid,
@@ -450,11 +616,12 @@ async function storeRate(uid, label, code, rate) {
     currencyCode: code,
     rateToKrw: rate,
     ratePerHundred: code === 'JPY' ? rate * 100 : null,
+    rateDate,
     searchedAt: Timestamp.fromDate(now),
     expireAt: Timestamp.fromDate(expire),
   };
   await ref.set(data);
-  await audit(uid, 'create', ref.id, ['currencyCode', 'rateToKrw', 'expireAt']);
+  await audit(uid, 'create', ref.id, ['currencyCode', 'rateToKrw', 'rateDate', 'expireAt']);
   return {
     id: ref.id,
     ...data,
@@ -615,8 +782,12 @@ const responseSchema = {
       required: ['action', 'startAt'],
       propertyOrdering: ['action', 'targetId', 'startAt', 'endAt', 'allDay', 'title'],
     },
-    weather: { type: 'OBJECT', properties: { cityQuery: { type: 'STRING' } } },
-    exchange: { type: 'OBJECT', properties: { currencyCode: { type: 'STRING' } } },
+    needsWebSearch: { type: 'BOOLEAN' },
+    weather: {
+      type: 'OBJECT',
+      properties: { cityQuery: { type: 'STRING' }, cityName: { type: 'STRING' }, date: { type: 'STRING' } },
+    },
+    exchange: { type: 'OBJECT', properties: { currencyCode: { type: 'STRING' }, date: { type: 'STRING' } } },
     news: { type: 'OBJECT', properties: { country: { type: 'STRING' } } },
     extractedSchedules: {
       type: 'ARRAY',
@@ -662,6 +833,15 @@ async function askGemini(locale, source, text, documentText, schedules, ledger) 
     'saveMode auto only for one clear schedule, clearly stated income or expense entries, or a weather, exchange, or news lookup.',
     'Moving, cancelling, correcting, or removing an existing schedule or ledger entry listed below is also saveMode auto.',
     'If source is file and you find schedules or amounts, saveMode must be confirm. Do not invent weather, rates, or headlines.',
+    'For targetMenu weather set weather.cityQuery to the place in English as "City,CC" (default "Seoul,KR" when no place is named),',
+    'weather.cityName to that place in the user\'s language, and weather.date to the asked day as YYYY-MM-DD resolved from now',
+    '(e.g. 사흘 뒤 is three days after today), or empty for right now or today.',
+    'For targetMenu exchange set exchange.currencyCode to the ISO code of the foreign currency against KRW (원달러 means USD),',
+    'and exchange.date to the asked day as YYYY-MM-DD, or empty for now or today; a month and day without a year means the most',
+    'recent such day that is not in the future.',
+    'needsWebSearch is true when answering needs facts from outside this conversation that may be recent or that you are not sure of',
+    '(news, people, prices, sports, events, places, history, anything checkable); false for the user\'s own schedules and ledger,',
+    'calculations, writing help, or chit-chat.',
     'Schedule times use ISO-8601. A date without a time means 09:00-10:00 Asia/Seoul.',
     'For targetMenu schedule set schedule.action: create for a new event; reschedule when the user moves an existing event to another date or time;',
     'cancel when the user says an existing event is cancelled or called off. For reschedule and cancel, schedule.targetId must be the id of the',
@@ -726,6 +906,59 @@ async function askGemini(locale, source, text, documentText, schedules, ledger) 
     return JSON.parse(raw);
   } catch (_) {
     throw new HttpsError('unavailable', 'gemini-failed');
+  }
+}
+
+const sourcesLabel = { ko: '출처', en: 'Sources', ja: '出典' };
+
+function plainText(value) {
+  return String(value || '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[*-]\s+/gm, '• ')
+    .trim();
+}
+
+/** Answers with Gemini grounded in Google Search; returns null when the call fails so the caller keeps its own answer. */
+async function askWeb(locale, text) {
+  const key = geminiKey();
+  if (!key || !String(text || '').trim()) {
+    return null;
+  }
+  const now = new Date();
+  const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'Asia/Seoul' }).format(now);
+  const prompt = [
+    `Answer in locale ${locale}, in plain text without Markdown, concisely and with the concrete figures, names, and dates asked for.`,
+    `Now in Asia/Seoul: ${seoulIso(now)} (${weekday}). Resolve relative dates from this.`,
+    'Search the web for anything that may have changed or that you are not certain of, and answer from what you find.',
+    'When a place is needed and none is named, assume Seoul, South Korea. If the answer cannot be known, say so plainly.',
+    `question: ${text}`,
+  ].join('\n');
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${geminiModel()}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: { thinkingConfig: { thinkingLevel: 'low' } },
+      }),
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      console.warn('web answer failed', response.status);
+      return null;
+    }
+    const candidate = body.candidates?.[0];
+    const answer = plainText((candidate?.content?.parts || []).filter((part) => part.thought !== true).map((part) => part.text || '').join(''));
+    if (!answer) {
+      return null;
+    }
+    const sources = [...new Set((candidate.groundingMetadata?.groundingChunks || []).map((chunk) => chunk.web?.title).filter(Boolean))].slice(0, 3);
+    return sources.length ? `${answer}\n${sourcesLabel[lang2(locale)]}: ${sources.join(', ')}` : answer;
+  } catch (error) {
+    console.warn('web answer failed', error.message);
+    return null;
   }
 }
 
@@ -797,7 +1030,7 @@ async function extractText(fileName, buffer) {
   throw new HttpsError('invalid-argument', 'bad-extension');
 }
 
-async function applyIntent(uid, intent, localeLabel) {
+async function applyIntent(uid, intent, localeLabel, retentionMs) {
   const menu = ['schedule', 'balance', 'weather', 'exchange', 'news', 'calculator', 'general'].includes(intent.targetMenu)
     ? intent.targetMenu
     : 'general';
@@ -842,40 +1075,36 @@ async function applyIntent(uid, intent, localeLabel) {
   if (failed && !savedMenu) {
     mode = 'none';
   }
-  if (mode === 'auto' && menu === 'weather') {
-    const key = readSecret(openWeatherKey);
+  // Lookups that our data sources cannot answer (a day beyond the forecast, an unknown place or currency) go to the web.
+  let askWebInstead = menu === 'general' && intent.needsWebSearch !== false;
+  if (menu === 'weather') {
     const query = resolveCityQuery(intent.weather?.cityQuery || '');
-    const reading = key ? await fetchWeather(query, key) : null;
-    if (!reading) {
-      throw new HttpsError('not-found', 'city-not-found');
+    const city = String(intent.weather?.cityName || '').trim() || query;
+    const reading = await readWeather(query, intent.weather?.date, readSecret(openWeatherKey), localeLabel);
+    if (reading) {
+      const stored = await storeWeather(uid, city, reading, retentionMs);
+      summary = weatherSummary(localeLabel, city, reading);
+      chart = reading.forDate
+        ? null
+        : { hasChart: true, type: 'bar', labels: [stored.cityName], values: [stored.temperature] };
+      savedMenu = 'weather';
+    } else {
+      askWebInstead = true;
     }
-    const stored = await storeWeather(uid, intent.weather?.cityQuery || query, reading);
-    summary = `${stored.cityName} ${Number(stored.temperature).toFixed(1)}°C ${stored.condition}`;
-    chart = {
-      hasChart: true,
-      type: 'bar',
-      labels: [stored.cityName],
-      values: [stored.temperature],
-    };
-    savedMenu = 'weather';
   }
-  if (mode === 'auto' && menu === 'exchange') {
+  if (menu === 'exchange') {
     const code = String(intent.exchange?.currencyCode || '').toUpperCase();
-    const allowed = ['USD', 'JPY', 'EUR', 'CNY', 'SGD', 'MYR'];
-    const key = readSecret(exchangeKey);
-    if (!allowed.includes(code) || !key) {
-      throw new HttpsError('invalid-argument', 'bad-currency');
+    const quote = /^[A-Z]{3}$/.test(code) && code !== 'KRW'
+      ? await readRate(code, intent.exchange?.date, readSecret(exchangeKey))
+      : null;
+    if (quote) {
+      await storeRate(uid, code, code, quote.rate, retentionMs, quote.date);
+      summary = rateSummary(localeLabel, code, quote);
+      chart = null;
+      savedMenu = 'exchange';
+    } else {
+      askWebInstead = true;
     }
-    const rate = await fetchRate(code, key);
-    if (rate == null) {
-      throw new HttpsError('unavailable', 'rate-failed');
-    }
-    await storeRate(uid, code, code, rate);
-    summary = code === 'JPY'
-      ? `1 JPY ${rate.toFixed(2)} KRW / 100 JPY ${(rate * 100).toFixed(2)} KRW`
-      : `1 ${code} ${rate.toFixed(2)} KRW`;
-    chart = null;
-    savedMenu = 'exchange';
   }
   if (mode === 'auto' && menu === 'news') {
     const country = String(intent.news?.country || '').toUpperCase() === 'JAPAN' ? 'JAPAN' : 'USA';
@@ -897,6 +1126,7 @@ async function applyIntent(uid, intent, localeLabel) {
     extractedBalances: awaitingConfirm ? extractedBalances : [],
     localeLabel,
     failed,
+    askWeb: askWebInstead,
   };
 }
 
@@ -935,7 +1165,7 @@ exports.getWeather = onCall({ region, secrets: [openWeatherKey] }, async (reques
   if (!reading) {
     throw new HttpsError('not-found', 'city-not-found');
   }
-  return storeWeather(uid, cityName || cityQuery, reading);
+  return storeWeather(uid, cityName || cityQuery, reading, retentionFor(request));
 });
 
 exports.getExchange = onCall({ region, secrets: [exchangeKey] }, async (request) => {
@@ -951,7 +1181,7 @@ exports.getExchange = onCall({ region, secrets: [exchangeKey] }, async (request)
   if (rate == null) {
     throw new HttpsError('unavailable', 'rate-failed');
   }
-  return storeRate(uid, label, code, rate);
+  return storeRate(uid, label, code, rate, retentionFor(request));
 });
 
 function newsPayload(id, data) {
@@ -1076,10 +1306,20 @@ exports.submitPrompt = onCall({ region, secrets: [openWeatherKey, exchangeKey, g
     if (filePath && ((intent.extractedSchedules || []).length || (intent.extractedBalances || []).length)) {
       intent.saveMode = 'confirm';
     }
-    let applied = await applyIntent(uid, intent, locale);
+    const retentionMs = retentionFor(request);
+    let applied = await applyIntent(uid, intent, locale, retentionMs);
     // The model occasionally drops a time or garbles a title; nothing was saved, so asking once more cannot duplicate anything.
     if (applied.failed && !applied.savedMenu && !filePath) {
-      applied = await applyIntent(uid, await askGemini(locale, 'text', text, '', schedules, ledger), locale);
+      applied = await applyIntent(uid, await askGemini(locale, 'text', text, '', schedules, ledger), locale, retentionMs);
+    }
+    if (applied.askWeb && !filePath) {
+      const answer = await askWeb(locale, text);
+      if (answer) {
+        applied.aiText = answer;
+        applied.table = null;
+        applied.chart = null;
+        applied.failed = false;
+      }
     }
     if (applied.failed) {
       const lang = notAppliedText[locale.slice(0, 2)] ? locale.slice(0, 2) : 'ko';
@@ -1290,3 +1530,124 @@ exports.syncBackup = onCall({ region, timeoutSeconds: 300 }, async (request) => 
   await audit(uid, 'sync-backup', uid, mirroredCollections);
   return { copied };
 });
+
+// The field each collection stamps when a document is created; retention counts from it.
+const createdFields = {
+  schedules: 'createdAt',
+  balance_entries: 'createdAt',
+  news_items: 'createdAt',
+  weather_logs: 'searchedAt',
+  exchange_logs: 'searchedAt',
+  turns: 'createdAt',
+};
+
+// The purge runs every 10 minutes and removes whatever would pass its limit before the next run, so nothing outlives it.
+const purgeLeadMs = 15 * 60 * 1000;
+
+/** Guests (anonymous accounts, or accounts already gone) keep data 72 hours, signed-in users 240 hours. */
+async function retentionOf(uid) {
+  try {
+    const user = await getAuth().getUser(uid);
+    return user.providerData.length === 0 ? guestRetentionMs : memberRetentionMs;
+  } catch (error) {
+    if (error.code === 'auth/user-not-found') {
+      return guestRetentionMs;
+    }
+    throw error;
+  }
+}
+
+function createdMs(doc, field) {
+  const stamp = doc.get(field);
+  return stamp && typeof stamp.toMillis === 'function' ? stamp.toMillis() : doc.createTime.toMillis();
+}
+
+/**
+ * Deletes one user's documents created at or before `cutoff` in `database`. The regular pass queries the creation field;
+ * the daily full pass also catches documents that lack it. Returns the names of collections that lost documents.
+ */
+async function purgeUserData(database, uid, cutoff, fullScan) {
+  const touched = [];
+  const writer = database.bulkWriter();
+  for (const [name, field] of Object.entries(createdFields)) {
+    const col = database.collection('users').doc(uid).collection(name);
+    const snap = fullScan ? await col.get() : await col.where(field, '<=', Timestamp.fromMillis(cutoff)).get();
+    const expired = snap.docs.filter((doc) => createdMs(doc, field) <= cutoff);
+    expired.forEach((doc) => writer.delete(doc.ref));
+    if (expired.length > 0) {
+      touched.push(name);
+    }
+  }
+  await writer.close();
+  return touched;
+}
+
+async function purgeAudit(now, guests) {
+  const writer = db().bulkWriter();
+  const memberCutoff = Timestamp.fromMillis(now - memberRetentionMs + purgeLeadMs);
+  const old = await db().collection('audit').where('at', '<=', memberCutoff).get();
+  old.docs.forEach((doc) => writer.delete(doc.ref));
+  const guestCutoff = Timestamp.fromMillis(now - guestRetentionMs + purgeLeadMs);
+  for (const uid of guests) {
+    const snap = await db().collection('audit').where('actorUid', '==', uid).where('at', '<=', guestCutoff).get();
+    snap.docs.forEach((doc) => writer.delete(doc.ref));
+  }
+  await writer.close();
+}
+
+async function purgeUploads(now, retention) {
+  const [files] = await getStorage().bucket().getFiles({ prefix: 'uploads/' });
+  for (const file of files) {
+    const uid = file.name.split('/')[1];
+    if (!uid) {
+      continue;
+    }
+    if (!retention.has(uid)) {
+      retention.set(uid, await retentionOf(uid).catch(() => null));
+    }
+    const keepMs = retention.get(uid);
+    const created = Date.parse(file.metadata.timeCreated || '');
+    if (keepMs && !Number.isNaN(created) && created <= now - keepMs + purgeLeadMs) {
+      await file.delete({ ignoreNotFound: true });
+    }
+  }
+}
+
+/** Removes every user's expired data from Firebase Firestore, the Google Cloud backup database, the audit log, and Storage. */
+async function purgeRetention(now, fullScan) {
+  const [primaryUsers, backupUsers] = await Promise.all([
+    db().collection('users').listDocuments(),
+    backupDb().collection('users').listDocuments(),
+  ]);
+  const uids = [...new Set([...primaryUsers, ...backupUsers].map((ref) => ref.id))];
+  const retention = new Map();
+  for (const uid of uids) {
+    try {
+      const keepMs = await retentionOf(uid);
+      retention.set(uid, keepMs);
+      const cutoff = now - keepMs + purgeLeadMs;
+      const touched = await purgeUserData(db(), uid, cutoff, fullScan);
+      if (touched.includes('balance_entries')) {
+        await recalculateBalances(uid);
+      }
+      await purgeUserData(backupDb(), uid, cutoff, fullScan);
+    } catch (error) {
+      console.error('retention purge failed for a user', error.message);
+    }
+  }
+  const guests = [...retention].filter(([, keepMs]) => keepMs === guestRetentionMs).map(([uid]) => uid);
+  const results = await Promise.allSettled([purgeAudit(now, guests), purgeUploads(now, retention)]);
+  const failures = results.filter((result) => result.status === 'rejected');
+  if (failures.length > 0) {
+    throw new Error(failures.map((result) => result.reason?.message).join('; '));
+  }
+}
+
+exports.purgeExpiredData = onSchedule(
+  { region, schedule: 'every 10 minutes', timeZone: 'Asia/Seoul', timeoutSeconds: 540, memory: '512MiB' },
+  async () => {
+    const now = Date.now();
+    const seoul = new Date(now + 9 * 60 * 60 * 1000);
+    await purgeRetention(now, seoul.getUTCHours() === 4 && seoul.getUTCMinutes() < 10);
+  },
+);
