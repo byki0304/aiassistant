@@ -466,51 +466,82 @@ function weatherCodeName(code, locale) {
   return row ? row[index] : '';
 }
 
+function addDays(date, days) {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+const maxForecastDays = 15;
+
 /**
- * Daily weather for one date at the place: Open-Meteo forecast covers the last two months and the next 15 days,
- * its archive covers older dates. Returns null when the date is beyond the forecast range.
+ * Daily weather from `start` to `end` at the place: Open-Meteo forecast covers the last two months and the next 15 days,
+ * its archive covers older dates. Days past the forecast range are dropped (`cutAfter` says from when); returns null
+ * when no asked day has data.
  */
-async function fetchDailyWeather(query, date, key, locale) {
-  const ahead = daysBetween(seoulToday(), date);
-  if (ahead > 15) {
+async function fetchDailyWeather(query, start, end, key, locale) {
+  const today = seoulToday();
+  const lastForecast = addDays(today, maxForecastDays);
+  if (start > lastForecast) {
     return null;
   }
+  const last = end > lastForecast ? lastForecast : end;
   const place = await geocode(query, key);
   if (!place) {
     return null;
   }
-  const archive = ahead < -60;
+  const archive = daysBetween(today, start) < -60;
   const fields = archive
     ? 'weather_code,temperature_2m_max,temperature_2m_min,relative_humidity_2m_mean'
     : 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,relative_humidity_2m_mean';
   const host = archive ? 'https://archive-api.open-meteo.com/v1/archive' : 'https://api.open-meteo.com/v1/forecast';
   const response = await fetch(
-    `${host}?latitude=${place.lat}&longitude=${place.lon}&daily=${fields}&timezone=auto&start_date=${date}&end_date=${date}`,
+    `${host}?latitude=${place.lat}&longitude=${place.lon}&daily=${fields}&timezone=auto&start_date=${start}&end_date=${last}`,
   );
   const daily = (await response.json()).daily;
-  const max = daily?.temperature_2m_max?.[0];
-  if (typeof max !== 'number') {
+  const days = (daily?.time || [])
+    .map((date, i) => ({
+      date,
+      max: daily.temperature_2m_max?.[i],
+      min: daily.temperature_2m_min?.[i],
+      rain: daily.precipitation_probability_max?.[i],
+      condition: weatherCodeName(daily.weather_code?.[i], locale),
+      humidity: Math.round(Number(daily.relative_humidity_2m_mean?.[i] ?? 0)),
+    }))
+    .filter((day) => typeof day.max === 'number')
+    .map((day) => ({ ...day, min: typeof day.min === 'number' ? day.min : null, rain: typeof day.rain === 'number' ? day.rain : null }));
+  if (days.length === 0) {
     return null;
   }
-  const min = daily.temperature_2m_min?.[0];
-  const rain = daily.precipitation_probability_max?.[0];
+  const lows = days.map((day) => day.min).filter((value) => value != null);
   return {
-    temperature: max,
-    temperatureMin: typeof min === 'number' ? min : null,
-    precipitation: typeof rain === 'number' ? rain : null,
-    condition: weatherCodeName(daily.weather_code?.[0], locale),
-    humidity: Math.round(Number(daily.relative_humidity_2m_mean?.[0] ?? 0)),
-    forDate: date,
+    days,
+    temperature: Math.max(...days.map((day) => day.max)),
+    temperatureMin: lows.length ? Math.min(...lows) : null,
+    precipitation: days.length === 1 ? days[0].rain : null,
+    condition: days[0].condition,
+    humidity: Math.round(days.reduce((sum, day) => sum + day.humidity, 0) / days.length),
+    forDate: days[0].date,
+    forEndDate: days.length > 1 ? days[days.length - 1].date : null,
+    cutAfter: end > lastForecast ? lastForecast : null,
   };
 }
 
-/** Current weather when no date or today is asked, otherwise that day's forecast or record. */
-async function readWeather(query, date, key, locale) {
+/** Current weather when no date or only today is asked, otherwise the forecast or record of each asked day. */
+async function readWeather(query, date, endDate, key, locale) {
   if (!key) {
     return null;
   }
-  const day = validDate(date);
-  return !day || day === seoulToday() ? fetchWeather(query, key, locale) : fetchDailyWeather(query, day, key, locale);
+  const start = validDate(date);
+  let end = validDate(endDate);
+  if (!start || (start === seoulToday() && (!end || end === start))) {
+    return fetchWeather(query, key, locale);
+  }
+  if (!end || end < start) {
+    end = start;
+  }
+  if (daysBetween(start, end) > 30) {
+    end = addDays(start, 30);
+  }
+  return fetchDailyWeather(query, start, end, key, locale);
 }
 
 function weatherSummary(locale, city, reading) {
@@ -523,6 +554,18 @@ function weatherSummary(locale, city, reading) {
       ja: `${city}の現在の天気: ${reading.condition}、${t(reading.temperature)}、湿度 ${reading.humidity}%`,
     }[lang];
   }
+  if (reading.forEndDate) {
+    const span = `${dateLabel(reading.forDate, locale)} ~ ${dateLabel(reading.forEndDate, locale)}`;
+    const cut = reading.cutAfter
+      ? { ko: ` (${dateLabel(reading.cutAfter, locale)} 이후는 아직 예보가 없습니다)`, en: ` (no forecast yet after ${dateLabel(reading.cutAfter, locale)})`, ja: ` (${dateLabel(reading.cutAfter, locale)}以降はまだ予報がありません)` }[lang]
+      : '';
+    const low = reading.temperatureMin == null ? null : t(reading.temperatureMin);
+    return {
+      ko: `${city} ${span} 날씨: 기간 중 최고 ${t(reading.temperature)}${low ? ` / 최저 ${low}` : ''}${cut}`,
+      en: `${city}, ${span}: highest ${t(reading.temperature)}${low ? ` / lowest ${low}` : ''}${cut}`,
+      ja: `${city} ${span}の天気: 期間中の最高 ${t(reading.temperature)}${low ? ` / 最低 ${low}` : ''}${cut}`,
+    }[lang];
+  }
   const day = dateLabel(reading.forDate, locale);
   const low = reading.temperatureMin == null ? '' : { ko: ` / 최저 ${t(reading.temperatureMin)}`, en: ` / low ${t(reading.temperatureMin)}`, ja: ` / 最低 ${t(reading.temperatureMin)}` }[lang];
   const rain = reading.precipitation == null ? '' : { ko: `, 강수확률 ${reading.precipitation}%`, en: `, ${reading.precipitation}% chance of rain`, ja: `、降水確率 ${reading.precipitation}%` }[lang];
@@ -531,6 +574,34 @@ function weatherSummary(locale, city, reading) {
     en: `${city} on ${day}: ${reading.condition}, high ${t(reading.temperature)}${low}${rain}, humidity ${reading.humidity}%`,
     ja: `${city} ${day}の天気: ${reading.condition}、最高 ${t(reading.temperature)}${low}${rain}、湿度 ${reading.humidity}%`,
   }[lang];
+}
+
+const weatherHeaders = {
+  ko: ['날짜', '날씨', '최고', '최저', '강수확률', '습도'],
+  en: ['Date', 'Weather', 'High', 'Low', 'Rain', 'Humidity'],
+  ja: ['日付', '天気', '最高', '最低', '降水確率', '湿度'],
+};
+
+/** A day-by-day table and a line chart of the highs when more than one day was asked. */
+function weatherDetails(locale, reading) {
+  if (!reading.forEndDate) {
+    return { table: null, chart: null };
+  }
+  const days = reading.days;
+  return {
+    table: {
+      headers: weatherHeaders[lang2(locale)],
+      rows: days.map((day) => [
+        dateLabel(day.date, locale),
+        day.condition,
+        `${day.max.toFixed(1)}°C`,
+        day.min == null ? '-' : `${day.min.toFixed(1)}°C`,
+        day.rain == null ? '-' : `${day.rain}%`,
+        `${day.humidity}%`,
+      ]),
+    },
+    chart: { hasChart: true, type: 'line', labels: days.map((day) => day.date.slice(5).replace('-', '/')), values: days.map((day) => day.max) },
+  };
 }
 
 async function storeWeather(uid, cityName, reading, retentionMs) {
@@ -545,6 +616,7 @@ async function storeWeather(uid, cityName, reading, retentionMs) {
     condition: reading.condition,
     humidity: reading.humidity,
     forDate: reading.forDate || null,
+    forEndDate: reading.forEndDate || null,
     searchedAt: Timestamp.fromDate(now),
     expireAt: Timestamp.fromDate(expire),
   };
@@ -782,10 +854,14 @@ const responseSchema = {
       required: ['action', 'startAt'],
       propertyOrdering: ['action', 'targetId', 'startAt', 'endAt', 'allDay', 'title'],
     },
-    needsWebSearch: { type: 'BOOLEAN' },
     weather: {
       type: 'OBJECT',
-      properties: { cityQuery: { type: 'STRING' }, cityName: { type: 'STRING' }, date: { type: 'STRING' } },
+      properties: {
+        cityQuery: { type: 'STRING' },
+        cityName: { type: 'STRING' },
+        date: { type: 'STRING' },
+        endDate: { type: 'STRING' },
+      },
     },
     exchange: { type: 'OBJECT', properties: { currencyCode: { type: 'STRING' }, date: { type: 'STRING' } } },
     news: { type: 'OBJECT', properties: { country: { type: 'STRING' } } },
@@ -835,13 +911,13 @@ async function askGemini(locale, source, text, documentText, schedules, ledger) 
     'If source is file and you find schedules or amounts, saveMode must be confirm. Do not invent weather, rates, or headlines.',
     'For targetMenu weather set weather.cityQuery to the place in English as "City,CC" (default "Seoul,KR" when no place is named),',
     'weather.cityName to that place in the user\'s language, and weather.date to the asked day as YYYY-MM-DD resolved from now',
-    '(e.g. 사흘 뒤 is three days after today), or empty for right now or today.',
+    '(e.g. 사흘 뒤 is three days after today), or empty for right now or today. When the user asks about a span of days',
+    '(다음주, 이번 주, 주말, 일주일, N일간, from one day to another) set weather.date to its first day and weather.endDate to its last',
+    'day: 다음주 is next Monday to next Sunday, 이번 주말 is this Saturday and Sunday, 앞으로 일주일 is today through six days later.',
+    'Leave weather.endDate empty for a single day.',
     'For targetMenu exchange set exchange.currencyCode to the ISO code of the foreign currency against KRW (원달러 means USD),',
     'and exchange.date to the asked day as YYYY-MM-DD, or empty for now or today; a month and day without a year means the most',
     'recent such day that is not in the future.',
-    'needsWebSearch is true when answering needs facts from outside this conversation that may be recent or that you are not sure of',
-    '(news, people, prices, sports, events, places, history, anything checkable); false for the user\'s own schedules and ledger,',
-    'calculations, writing help, or chit-chat.',
     'Schedule times use ISO-8601. A date without a time means 09:00-10:00 Asia/Seoul.',
     'For targetMenu schedule set schedule.action: create for a new event; reschedule when the user moves an existing event to another date or time;',
     'cancel when the user says an existing event is cancelled or called off. For reschedule and cancel, schedule.targetId must be the id of the',
@@ -920,7 +996,7 @@ function plainText(value) {
 }
 
 /** Answers with Gemini grounded in Google Search; returns null when the call fails so the caller keeps its own answer. */
-async function askWeb(locale, text) {
+async function askWeb(locale, text, schedules, ledger) {
   const key = geminiKey();
   if (!key || !String(text || '').trim()) {
     return null;
@@ -932,6 +1008,10 @@ async function askWeb(locale, text) {
     `Now in Asia/Seoul: ${seoulIso(now)} (${weekday}). Resolve relative dates from this.`,
     'Search the web for anything that may have changed or that you are not certain of, and answer from what you find.',
     'When a place is needed and none is named, assume Seoul, South Korea. If the answer cannot be known, say so plainly.',
+    'Answer exactly what is asked: every day of an asked period, every item of an asked list, the asked date rather than today.',
+    'For questions about the user\'s own plans or money, use their schedules and ledger entries below.',
+    `user's schedules (id | title | start | state):\n${schedules || '(none)'}`,
+    `user's ledger entries (id | description | kind | amount | when):\n${ledger || '(none)'}`,
     `question: ${text}`,
   ].join('\n');
   try {
@@ -1043,6 +1123,7 @@ async function applyIntent(uid, intent, localeLabel, retentionMs) {
   let savedMenu = null;
   let summary = String(intent.summaryText || '');
   let chart = intent.chart && intent.chart.hasChart ? intent.chart : null;
+  let table = intent.table || null;
 
   // One message may carry a schedule and ledger entries together; `failed` marks any part that could not be applied.
   let failed = false;
@@ -1075,21 +1156,19 @@ async function applyIntent(uid, intent, localeLabel, retentionMs) {
   if (failed && !savedMenu) {
     mode = 'none';
   }
-  // Lookups that our data sources cannot answer (a day beyond the forecast, an unknown place or currency) go to the web.
-  let askWebInstead = menu === 'general' && intent.needsWebSearch !== false;
   if (menu === 'weather') {
     const query = resolveCityQuery(intent.weather?.cityQuery || '');
     const city = String(intent.weather?.cityName || '').trim() || query;
-    const reading = await readWeather(query, intent.weather?.date, readSecret(openWeatherKey), localeLabel);
+    const reading = await readWeather(query, intent.weather?.date, intent.weather?.endDate, readSecret(openWeatherKey), localeLabel);
     if (reading) {
       const stored = await storeWeather(uid, city, reading, retentionMs);
       summary = weatherSummary(localeLabel, city, reading);
+      const details = weatherDetails(localeLabel, reading);
+      table = details.table;
       chart = reading.forDate
-        ? null
+        ? details.chart
         : { hasChart: true, type: 'bar', labels: [stored.cityName], values: [stored.temperature] };
       savedMenu = 'weather';
-    } else {
-      askWebInstead = true;
     }
   }
   if (menu === 'exchange') {
@@ -1100,10 +1179,9 @@ async function applyIntent(uid, intent, localeLabel, retentionMs) {
     if (quote) {
       await storeRate(uid, code, code, quote.rate, retentionMs, quote.date);
       summary = rateSummary(localeLabel, code, quote);
+      table = null;
       chart = null;
       savedMenu = 'exchange';
-    } else {
-      askWebInstead = true;
     }
   }
   if (mode === 'auto' && menu === 'news') {
@@ -1117,7 +1195,7 @@ async function applyIntent(uid, intent, localeLabel, retentionMs) {
   const awaitingConfirm = mode === 'confirm' && (extractedSchedules.length > 0 || extractedBalances.length > 0);
   return {
     aiText: summary,
-    table: intent.table || null,
+    table,
     chart,
     savedMenu,
     targetMenu: menu === 'general' ? null : menu === 'schedule' ? 'schedules' : menu,
@@ -1126,7 +1204,8 @@ async function applyIntent(uid, intent, localeLabel, retentionMs) {
     extractedBalances: awaitingConfirm ? extractedBalances : [],
     localeLabel,
     failed,
-    askWeb: askWebInstead,
+    // Every answer that is not a saved change or a weather, rate, or news lookup is written by the web-searching model.
+    askWeb: !savedMenu && !failed && !awaitingConfirm,
   };
 }
 
@@ -1313,12 +1392,14 @@ exports.submitPrompt = onCall({ region, secrets: [openWeatherKey, exchangeKey, g
       applied = await applyIntent(uid, await askGemini(locale, 'text', text, '', schedules, ledger), locale, retentionMs);
     }
     if (applied.askWeb && !filePath) {
-      const answer = await askWeb(locale, text);
+      const answer = await askWeb(locale, text, schedules, ledger);
       if (answer) {
         applied.aiText = answer;
-        applied.table = null;
-        applied.chart = null;
-        applied.failed = false;
+        // Tables and charts the router built from the user's own data stay; others could contradict the searched answer.
+        if (!['schedules', 'balance', 'calculator'].includes(applied.targetMenu)) {
+          applied.table = null;
+          applied.chart = null;
+        }
       }
     }
     if (applied.failed) {

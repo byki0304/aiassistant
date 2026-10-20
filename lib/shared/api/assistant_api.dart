@@ -344,6 +344,7 @@ class WeatherItem {
     required this.expireAt,
     this.temperatureMin,
     this.forDate,
+    this.forEndDate,
   });
 
   final String id;
@@ -359,6 +360,9 @@ class WeatherItem {
 
   /// The forecast or recorded day (YYYY-MM-DD); null for current weather.
   final String? forDate;
+
+  /// The last day when a span was asked; [temperature] and [temperatureMin] are then the span's extremes.
+  final String? forEndDate;
 
   bool get isLive => isUnexpired(expireAt, DateTime.now());
 
@@ -377,6 +381,7 @@ class WeatherItem {
       expireAt: readTime(data['expireAt']),
       temperatureMin: (data['temperatureMin'] as num?)?.toDouble(),
       forDate: data['forDate'] as String?,
+      forEndDate: data['forEndDate'] as String?,
     );
   }
 }

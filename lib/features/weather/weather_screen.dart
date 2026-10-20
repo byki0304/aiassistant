@@ -93,7 +93,8 @@ class _WeatherScreenState extends ConsumerState<WeatherScreen> {
                         RowText(
                           item.forDate == null
                               ? '${item.cityName}  ${item.temperature.toStringAsFixed(1)}°C'
-                              : '${item.cityName} · ${DateFormat.MMMEd(locale).format(DateTime.parse(item.forDate!))}  '
+                              : '${item.cityName} · ${DateFormat.MMMEd(locale).format(DateTime.parse(item.forDate!))}'
+                                    '${item.forEndDate == null ? '' : ' ~ ${DateFormat.MMMEd(locale).format(DateTime.parse(item.forEndDate!))}'}  '
                                     '${item.temperature.toStringAsFixed(1)}°'
                                     '${item.temperatureMin == null ? '' : ' / ${item.temperatureMin!.toStringAsFixed(1)}°'}C',
                           style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14.5),
